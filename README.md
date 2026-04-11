@@ -98,6 +98,9 @@ cd cs2_ws
 # Fetch external dependencies
 vcs import < deps.repos
 
+# Initialize submodules inside crazyswarm2 (needed for crazyflie_tools)
+cd src/crazyswarm2 && git submodule update --init --recursive && cd ../..
+
 # Install ROS dependencies
 rosdep install --from-paths src --ignore-src -r -y
 
