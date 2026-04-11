@@ -1,0 +1,66 @@
+fileversion: 3
+
+robots:
+  # Station 1 (bottom-left): cf1 active, cf5 standby
+  cf1:
+    enabled: true
+    type: cf21
+    initial_position: [-1.5, -1.6, 0.03]
+  cf5:
+    enabled: true
+    type: cf21
+    initial_position: [-1.5, -1.4, 0.03]
+
+  # Station 2 (bottom-right): cf2 active, cf6 standby
+  cf2:
+    enabled: true
+    type: cf21
+    initial_position: [1.5, -1.6, 0.03]
+  cf6:
+    enabled: true
+    type: cf21
+    initial_position: [1.5, -1.4, 0.03]
+
+  # Station 3 (top-left): cf3 active, cf7 standby
+  cf3:
+    enabled: true
+    type: cf21
+    initial_position: [-1.5, 1.4, 0.03]
+  cf7:
+    enabled: true
+    type: cf21
+    initial_position: [-1.5, 1.6, 0.03]
+
+  # Station 4 (top-right): cf4 active, cf8 standby
+  cf4:
+    enabled: true
+    type: cf21
+    initial_position: [1.5, 1.4, 0.03]
+  cf8:
+    enabled: true
+    type: cf21
+    initial_position: [1.5, 1.6, 0.03]
+
+robot_types:
+  cf21:
+    motion_capture:
+      tracking: "librigidbodytracker"   # required by your loader even in SIL
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8
+      voltage_critical: 3.7
+
+all:
+  firmware_params:
+    commander: { enHighLevel: 1 }
+    stabilizer: { estimator: 2, controller: 2 }
+  
+  
+  firmware_logging:
+      enabled: true
+      default_topics:
+        pose:
+          frequency: 50  # Hz (you can set 10 if you prefer)
+

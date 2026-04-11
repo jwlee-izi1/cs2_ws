@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cf_payload_world</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo world: 4 Crazyflies carrying a rectangular payload via 4 equal-length
+    rigid links (ball-joint approximation). Physics-ready for future control work.
+    Two configurations: level and 20-degree tilted.
+  </description>
+
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ros_gz_crazyflie_gazebo</exec_depend>
+  <exec_depend>ros_gz_crazyflie_control</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

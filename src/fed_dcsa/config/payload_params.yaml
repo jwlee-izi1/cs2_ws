@@ -1,0 +1,13 @@
+payload_optimizer:
+  ros__parameters:
+    K: 15
+    T: 5
+    q_weights: [1.0, 1.0, 1.0, 1.0]
+    w_weights: [1.0, 1.0, 1.0, 1.0]
+    tau_max: 0.0016
+    delta_z_max: 0.15
+    c1: 0.002
+    c2: 0.003
+    settle_time: 4.0
+    drone_names: ["cf1", "cf2", "cf3", "cf4"]
+    use_sim_time: true

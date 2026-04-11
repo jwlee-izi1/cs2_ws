@@ -1,0 +1,42 @@
+fed_dcsa:
+  ros__parameters:
+    # === Algorithm parameters ===
+    K: 20                          # outer communication rounds
+    T: 18                          # inner local gradient steps per round
+    tau: 0.7                       # binary rounding threshold
+    delta: 0.1                     # probability parameter (Corollary 2)
+
+    # === Station configuration ===
+    # [active, standby] drone name pairs per station
+    station_active:  ["cf1", "cf2", "cf3", "cf4"]
+    station_standby: ["cf5", "cf6", "cf7", "cf8"]
+
+    # Charging pad positions (where drones start and return for swap)
+    charge_pad_x: [-1.5,  1.5, -1.5,  1.5]
+    charge_pad_y: [-1.5, -1.5,  1.5,  1.5]
+
+    # Survey target positions (center of each quadrant in 2x2m survey area)
+    survey_target_x: [-0.5,  0.5, -0.5,  0.5]
+    survey_target_y: [-0.5, -0.5,  0.5,  0.5]
+
+    patrol_height: 0.5            # hover height for surveillance (m)
+
+    # === Energy model ===
+    E_max: 170.0                   # full battery capacity (Wh)
+    E_thr: 50.0                    # safety reserve threshold (Wh)
+
+    # Heterogeneous per-station energy costs (Wh per epoch at full activity)
+    e_rates: [10.0, 12.0, 8.0, 15.0]
+
+    # Surveillance quality weights per station
+    q_weights: [1.0, 1.0, 1.0, 1.0]
+
+    # === Timing ===
+    round_period: 12.0             # seconds (sim-time) per algorithm round
+    land_duration: 2.0             # seconds for land command
+    takeoff_duration: 2.0          # seconds for takeoff command
+    goto_duration: 4.0             # seconds for go_to command
+
+    # === Logging ===
+    log_dir: "/home/rk32226/cs2_ws/fed_dcsa_logs"
+    experiment_name: "gazebo_run"

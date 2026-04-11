@@ -1,0 +1,6 @@
+k,station_id,old_active,new_active,battery_at_swap
+8,3,cf4,cf8,50.00
+10,1,cf2,cf6,50.00
+12,0,cf1,cf5,50.00
+15,2,cf3,cf7,50.00
+17,3,cf8,cf4,50.00

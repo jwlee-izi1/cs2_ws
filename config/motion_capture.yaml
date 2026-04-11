@@ -1,0 +1,7 @@
+fileversion: 1
+motion_capture:
+  type: vicon
+  hostname: "<VICON_HOST_OR_IP>"
+  enable_pointcloud: false
+max_occluded_time: 0.2
+rigid_bodies: {}

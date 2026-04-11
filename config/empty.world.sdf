@@ -1,0 +1,10 @@
+<sdf version="1.7">
+  <world name="empty">
+    <!-- Simple, stable default world -->
+    <gravity>0 0 -9.81</gravity>
+    <physics name="default" type="ignored"/>
+    <!-- Optional visual helpers (will fetch local models if available) -->
+    <include><uri>gz://ground_plane</uri></include>
+    <include><uri>gz://sun</uri></include>
+  </world>
+</sdf>
