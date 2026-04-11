@@ -1,6 +1,6 @@
 # cs2_ws — Multi-Project Crazyflie ROS2 Workspace
 
-A ROS2 (Humble) workspace for multi-drone research using Bitcraze Crazyflie 2.1 quadrotors with Gazebo Harmonic simulation. This repo contains three research projects sharing a common Crazyflie simulation and control stack.
+A ROS2 (Jazzy) workspace for multi-drone research using Bitcraze Crazyflie 2.1 quadrotors with Gazebo Harmonic simulation. This repo contains three research projects sharing a common Crazyflie simulation and control stack.
 
 ---
 
@@ -83,7 +83,7 @@ cs2_ws/
 ## Setup
 
 ### Prerequisites
-- ROS2 Humble
+- ROS2 Jazzy
 - Gazebo Harmonic
 - Python 3.10+
 - [`vcs` tool](https://github.com/dirk-thomas/vcstool) (`pip install vcstool`)
