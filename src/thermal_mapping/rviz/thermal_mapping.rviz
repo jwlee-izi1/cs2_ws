@@ -1,0 +1,100 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Marker Scale: 1
+      Name: TF
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: false
+      Class: grid_map_rviz_plugin/GridMap
+      Color: 200; 200; 200
+      Color Layer: thermal
+      Color Transformer: IntensityLayer
+      Enabled: true
+      Height Layer: thermal
+      Height Transformer: Flat
+      History Length: 1
+      Invert Rainbow: false
+      Max Color: 255; 0; 0
+      Max Intensity: 50
+      Min Color: 0; 0; 255
+      Min Intensity: 20
+      Name: ThermalMap
+      Show Grid Lines: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /thermal_map
+      Use Rainbow: true
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: false
+      Class: grid_map_rviz_plugin/GridMap
+      Color: 255; 255; 255
+      Color Layer: dropped
+      Color Transformer: IntensityLayer
+      Enabled: true
+      Height Layer: thermal
+      Height Transformer: Flat
+      History Length: 1
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 1.0
+      Min Color: 255; 255; 255
+      Min Intensity: 0.5
+      Name: DroppedOverlay
+      Show Grid Lines: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /thermal_map
+      Use Rainbow: false
+      Value: true
+  Global Options:
+    Background Color: 100; 100; 100
+    Fixed Frame: world
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 8
+      Focal Point: {X: 0, Y: 0, Z: 0}
+      Name: Current View
+      Pitch: 0.785
+      Yaw: 0.785
+      Target Frame: <Fixed Frame>
+Window Geometry:
+  Height: 800
+  Width: 1200

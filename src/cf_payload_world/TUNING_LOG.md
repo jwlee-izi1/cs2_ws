@@ -88,3 +88,4 @@ ros2 service call /cf1/go_to crazyflie_interfaces/srv/GoTo \
 | `src/cf_payload_world/launch/payload_hover.launch.py` | Combined launch (Gazebo -r + bridge + control), paused=false |
 | `src/ros_gz_crazyflie/ros_gz_crazyflie_control/ros_gz_crazyflie_control/control_services.py` | Added kd_z/kd_xy params, auto-hover on startup, max_vel_z=2.0 |
 | `src/cf_payload_world/scripts/test_payload_hover.py` | Test script with odom recording and plotting |
+438F-2031

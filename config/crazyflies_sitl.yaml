@@ -1,0 +1,41 @@
+# Single-drone SITL config for CrazySim smoke test.
+# UDP port 19850 + cf_id (cf_id=0 here, so port 19850).
+fileversion: 3
+
+robots:
+  cf1:
+    enabled: true
+    uri: udp://127.0.0.1:19850
+    initial_position: [0.0, 0.0, 0.0]
+    type: cf21
+    firmware_logging:
+      enabled: true
+      default_topics:
+        odom:
+          frequency: 20
+
+robot_types:
+  cf21:
+    motion_capture:
+      enabled: false
+      tracking: "off"
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8
+      voltage_critical: 3.7
+
+all:
+  firmware_params:
+    commander:
+      enHighLevel: 1
+    stabilizer:
+      estimator: 2  # complementary filter
+      controller: 1  # PID
+  firmware_logging:
+    # Needed for /cfN/odom — thermal_mapping subscribes to this.
+    enabled: true
+    default_topics:
+      odom:
+        frequency: 20

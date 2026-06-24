@@ -1,0 +1,87 @@
+# PPO hyperparameters for the RL coverage policy.
+# Loaded by training/train_ppo.py. Values reflect SB3 PPO defaults adjusted
+# for continuous-control + medium-dim observation per Coverage RL paper.
+
+env:
+  arena_yaml: src/cf_coverage_planner/config/arena_4drone.yaml
+  thermal_yaml: src/thermal_mapping/config/thermal_field.yaml
+  episode_seconds: 360.0
+  tick_hz: 5.0
+  action_slack: 1.03
+  past_action_history: 10
+  age_crop_size: 32
+  reward_candidate: "A"
+  randomize_sectors: true
+  max_velocity: 1.0   # training-time conservative hedge; deployment streamer cap stays 1.5
+  # 2026-05-28 iter10: switched from "point_mass" to "cascaded_pid" — exact
+  # 2D approximation of the crazyflie firmware's cascaded position+velocity PID
+  # (gains from platform_defaults_sitl.h). iter9 (point_mass) spent 95% of
+  # ticks out-of-sector when deployed against cascaded PID, so this is
+  # required for sim2real transfer to SITL + HW.
+  dynamics_model: cascaded_pid
+  randomize_dynamics: true     # sample ±25% gain perturbations per episode
+
+reward_weights:
+  # Iteration 3 (post-eval): edge_util fell to 0.78 because w_hot=5 pulled the
+  # drone INWARD when fire was near origin. Bumping w_edge + raising offset so
+  # edge_pull only fires when drone is genuinely close to the boundary —
+  # forces the policy to learn "ride wavefront", not "ride brightest pixel".
+  # iter16 (2026-06-04): COMMENSURATE terms — bound + down-scale coverage to a SMALL
+  # secondary bonus so the leash-sweep (edge/anchor/theta_bias, now always-on) is the
+  # DOMINANT rewarded behavior → rising-then-plateau reward curve (not declining).
+  w_cov: 1.0          # scale on the down-scaled coverage bonus
+  cov_scale: 3000.0   # raw coverage ~14k on-fire / 3000 ≈ 4.7
+  cov_cap: 5.0        # clip fresh-region coverage spikes (raw -> millions) to 5
+  w_anchor: 45.0      # pull r->edge_target·leash (symmetric); dominant positioning term
+  edge_target: 0.99   # iter18: 0.96 -> 0.99 (ride TIGHT at the leash). With the receding-horizon
+                      #         streamer there's no tracking overshoot to fear, so riding tight is safe
+                      #         AND restores the Fed<Lag contrast at B_op=8.4 (Lag overshoot -> drops,
+                      #         Fed holds B -> clean; also clean at the honest 8.15).
+  w_theta_bias: 5.0   # sweep symmetry (penalize sustained one-sided theta)
+  theta_bias_alpha: 0.05
+  # iter17: angular-coverage SWEEP reward (restore the wide sweep iter16 lost). Rewards
+  # covering the sector ARC (angular) -> wide sweep at the leash; orthogonal to the anchor.
+  w_sweep: 0.5
+  sweep_n_bins: 12
+  sweep_age_cap: 10.0
+  w_hot: 4.0          # 5.0 -> 4.0 (slight reduction so edge can compete)
+  w_explore: 0.05
+  w_stale_revisit: 0.1
+  w_edge: 12.0        # iter16: 10 -> 12 (edge pull at r=0.99·leash ≈ 3.5)
+  w_smooth: 0.5
+  w_leash: 10.0
+  w_step: 0.01
+  max_age_hot: 30.0
+  max_age_explore: 30.0
+  edge_offset: 0.7    # 0.5 -> 0.7 (edge_pull only fires above 70% of leash)
+  # iter10: sector-violation penalty. Quadratic in (|d_phi| - phi_half) outside
+  # the wedge. Required for cascaded PID (drone has overshoot), 0 was implicit
+  # under point-mass. 50 calibrated so a 6° excursion costs ~5 reward — same
+  # order as a typical coverage-tick.
+  w_sector: 50.0
+
+ppo:
+  total_timesteps: 100_000      # In-chat sanity. Bump to 2_000_000 - 8_000_000 on server.
+  n_envs: 8                      # In-chat. Bump to 64+ on server.
+  n_steps: 256                   # rollout buffer per env per PPO update
+  batch_size: 512
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  learning_rate: 3.0e-4
+  lr_schedule: linear   # iter16: linearly anneal LR 3e-4 -> 0 (standard PPO practice;
+                        # PPO paper Table 5, SB3 RL Zoo `lin_`). Kills the late-training
+                        # drift. Set to "constant" for the flat-LR behavior.
+  max_grad_norm: 0.5
+
+network:
+  cnn_out_features: 64
+  mlp_hidden: [128, 128]
+
+logging:
+  tensorboard_dir: exp1/rl_training/tb
+  checkpoint_freq: 50_000
+  checkpoint_dir: exp1/rl_training/checkpoints

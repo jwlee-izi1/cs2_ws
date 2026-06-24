@@ -1,0 +1,31 @@
+diff --git a/sitl_make/CMakeLists.txt b/sitl_make/CMakeLists.txt
+index 834317c6..0416dd64 100644
+--- a/sitl_make/CMakeLists.txt
++++ b/sitl_make/CMakeLists.txt
+@@ -168,6 +168,7 @@ set(SRCS
+   ${CF2_SITL_SRCS_DIR}/modules/src/supervisor_state_machine.c
+   ${CF2_SITL_SRCS_DIR}/modules/src/app_channel.c
+   ${CF2_SITL_SRCS_DIR}/modules/src/peer_localization.c
++  ${CF2_SITL_SRCS_DIR}/modules/src/collision_avoidance.c
+   ${CF2_SITL_SRCS_DIR}/modules/src/axis3fSubSampler.c
+   #stabilizer modules
+   ${CF2_SITL_SRCS_DIR}/modules/src/commander.c
+diff --git a/src/modules/src/stabilizer.c b/src/modules/src/stabilizer.c
+index 23a38a8e..05ddf431 100644
+--- a/src/modules/src/stabilizer.c
++++ b/src/modules/src/stabilizer.c
+@@ -329,11 +329,10 @@ static void stabilizerTask(void* param)
+       // Let the supervisor update it's view of the current situation
+       supervisorUpdate(&sensorData, &setpoint, stabilizerStep);
+ 
+-      // TODO: Add collision avoidance to SITL
+-      #ifndef CONFIG_PLATFORM_SITL
+-      // Let the collision avoidance module modify the setpoint, if needed
++      // Let the collision avoidance module modify the setpoint, if needed.
++      // BVC is enabled in SITL too (guard removed): peer positions are fed via packed
++      // EXT_POSITION_PACKED CRTP from the server broadcaster. See CRAZYSIM_MIGRATION.md.
+       collisionAvoidanceUpdateSetpoint(&setpoint, &sensorData, &state, stabilizerStep);
+-      #endif
+       // Critical for safety, be careful if you modify this code!
+       // Let the supervisor modify the setpoint to handle exceptional conditions
+       supervisorOverrideSetpoint(&setpoint);

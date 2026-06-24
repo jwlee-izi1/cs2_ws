@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rl_demo</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo playback layer for 2D RL trajectories. Wraps ros_gz_crazyflie
+    bringup without editing it, using GZ_SIM_RESOURCE_PATH prepend for a
+    private unscaled Crazyflie model and upload_trajectory for polynomial
+    playback of offline 2D RL rollouts.
+  </description>
+
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ros_gz_crazyflie_bringup</exec_depend>
+  <exec_depend>ros_gz_crazyflie_control</exec_depend>
+  <exec_depend>ros_gz_crazyflie_gazebo</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>crazyflie_interfaces</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

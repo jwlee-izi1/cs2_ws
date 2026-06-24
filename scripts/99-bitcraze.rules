@@ -1,0 +1,21 @@
+# Bitcraze udev rules — non-root USB access for Crazyradio + CF bootloader.
+#
+# This machine uses LDAP/Kerberos auth, so `usermod -aG plugdev $USER` is a
+# no-op (LDAP users can't be added to local groups). Workaround: use MODE 0666
+# so any local user can access the device without group membership.
+# Acceptable on a single-user lab dev box.
+#
+# Install with:
+#   sudo cp ~/cs2_ws/scripts/99-bitcraze.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+# Then unplug + replug the Crazyradio so the new rules apply.
+
+# Crazyradio (PA) — VID 1915, PID 7777
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="7777", MODE="0666"
+
+# Crazyradio 2.0 — VID 1915, PID 0101
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="0101", MODE="0666"
+
+# Crazyflie 2.x in bootloader mode (STM32 DFU) — VID 0483, PID 5740
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", MODE="0666"

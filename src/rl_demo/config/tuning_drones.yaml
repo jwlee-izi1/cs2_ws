@@ -1,0 +1,30 @@
+fileversion: 3
+
+# Phase A tuning: one drone only, spawned off-center with clear space
+# for straight 1 m/s legs in +X direction before the geofence at 1.9m.
+robots:
+  cf1:
+    enabled: true
+    type: cf21
+    initial_position: [-1.5, 0.0, 0.03]
+
+robot_types:
+  cf21:
+    motion_capture:
+      tracking: "librigidbodytracker"
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8
+      voltage_critical: 3.7
+
+all:
+  firmware_params:
+    commander: { enHighLevel: 1 }
+    stabilizer: { estimator: 2, controller: 2 }
+  firmware_logging:
+    enabled: true
+    default_topics:
+      pose:
+        frequency: 50

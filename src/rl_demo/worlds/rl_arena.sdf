@@ -1,0 +1,168 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <world name="rl_arena">
+
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+
+    <gravity>0 0 -9.81</gravity>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>1.0 1.0 1.0 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.3 0.3 -1</direction>
+    </light>
+
+    <!-- Ground plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="ground_plane_link">
+        <collision name="ground_plane_collision">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+        </collision>
+        <visual name="ground_plane_visual">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+          <material>
+            <ambient>0.15 0.15 0.17 1</ambient>
+            <diffuse>0.25 0.25 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Arena boundary: ground-painted strips (0.02 m tall) instead of walls
+         so camera angles aren't occluded. Yellow-orange to stand out. -->
+    <model name="wall_x_neg">
+      <static>true</static>
+      <pose>-2.0 0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="v"><geometry><box><size>0.08 4.08 0.02</size></box></geometry>
+          <material><ambient>0.95 0.7 0.1 1</ambient><diffuse>1.0 0.8 0.15 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_x_pos">
+      <static>true</static>
+      <pose>2.0 0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="v"><geometry><box><size>0.08 4.08 0.02</size></box></geometry>
+          <material><ambient>0.95 0.7 0.1 1</ambient><diffuse>1.0 0.8 0.15 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_y_neg">
+      <static>true</static>
+      <pose>0 -2.0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="v"><geometry><box><size>4.08 0.08 0.02</size></box></geometry>
+          <material><ambient>0.95 0.7 0.1 1</ambient><diffuse>1.0 0.8 0.15 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="wall_y_pos">
+      <static>true</static>
+      <pose>0 2.0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="v"><geometry><box><size>4.08 0.08 0.02</size></box></geometry>
+          <material><ambient>0.95 0.7 0.1 1</ambient><diffuse>1.0 0.8 0.15 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Goal marker (thin disc; position to be updated per-run or overridden) -->
+    <model name="goal_marker">
+      <static>true</static>
+      <pose>1.4 1.4 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.01</length></cylinder></geometry>
+          <material><ambient>0.1 0.8 0.2 0.5</ambient><diffuse>0.1 0.9 0.2 0.5</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- 5 static cylindrical obstacles (radius 0.20 m, height 0.8 m).
+         Positions picked to leave clear but non-trivial paths across the arena.
+         Phase B: adjust per RL layout. -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>-0.8 -0.8 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.3 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>0.6 -0.3 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.3 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="obstacle_3">
+      <static>true</static>
+      <pose>-0.2 0.9 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.3 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="obstacle_4">
+      <static>true</static>
+      <pose>1.1 0.6 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.3 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="obstacle_5">
+      <static>true</static>
+      <pose>-1.2 0.3 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.20</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.3 0.3 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Top-down camera for video recording. Pose: 4 m above origin, looking
+         straight down. Publishes image on /world/rl_arena/model/record_cam/
+         link/link/sensor/camera/image; bridged to /camera/image by rl_demo.launch.py. -->
+    <model name="record_cam">
+      <static>true</static>
+      <pose>0 0 4.0 0 1.5707963 0</pose>
+      <link name="link">
+        <sensor name="camera" type="camera">
+          <pose>0 0 0 0 0 0</pose>
+          <camera>
+            <horizontal_fov>1.2</horizontal_fov>
+            <image><width>1280</width><height>720</height></image>
+            <clip><near>0.1</near><far>20</far></clip>
+          </camera>
+          <always_on>1</always_on>
+          <update_rate>30</update_rate>
+          <visualize>false</visualize>
+          <topic>/camera/image</topic>
+        </sensor>
+      </link>
+    </model>
+
+    <gui fullscreen='0'>
+      <camera name="user_camera">
+        <pose>3.0 -3.0 2.5 0 0.55 2.35</pose>
+      </camera>
+    </gui>
+
+  </world>
+</sdf>

@@ -45,6 +45,8 @@ class PayloadOptimizerNode(Node):
         self.declare_parameter('settle_time', 4.0)
         self.declare_parameter('drone_names', ['cf1', 'cf2', 'cf3', 'cf4'])
         self.declare_parameter('dry_run', False)
+        self.declare_parameter('transport_vx', 0.0)
+        self.declare_parameter('transport_vy', 0.0)
 
         self.K = self.get_parameter('K').value
         self.T = self.get_parameter('T').value
@@ -57,6 +59,8 @@ class PayloadOptimizerNode(Node):
         self.settle_time = self.get_parameter('settle_time').value
         self.drone_names = list(self.get_parameter('drone_names').value)
         self.dry_run = self.get_parameter('dry_run').value
+        self.transport_vx = self.get_parameter('transport_vx').value
+        self.transport_vy = self.get_parameter('transport_vy').value
 
         self.n_drones = len(self.drone_names)
 
@@ -193,6 +197,9 @@ class PayloadOptimizerNode(Node):
 
         self.state = RUN_ROUNDS
         self.current_round = 0
+        self.transport_t0 = self._now()
+        # Track the last z sent to each drone (for transport-only rounds)
+        self.last_sent_z = [d.z_bar for d in self.drones]
 
     def _tick_run_rounds(self):
         # Check if we're waiting for settle
@@ -253,13 +260,28 @@ class PayloadOptimizerNode(Node):
             f'F={result.F_value:.6f} '
             f'δz=[{", ".join(f"{d:.4f}" for d in result.dz_after)}]')
 
-        # Send corrections at feasible rounds
+        # Compute transport offset
+        t_elapsed = self._now() - self.transport_t0
+        x_offset = self.transport_vx * t_elapsed
+        y_offset = self.transport_vy * t_elapsed
+
         if result.b_k == 1:
+            # Feasible: send transport + z correction
             for i, name in enumerate(self.drone_names):
                 d = self.drones[i]
-                self._call_goto(name, d.x_bar, d.y_bar, d.z_bar + d.dz)
+                z_target = d.z_bar + d.dz
+                self._call_goto(name, d.x_bar + x_offset, d.y_bar + y_offset, z_target)
+                self.last_sent_z[i] = z_target
             self.get_logger().info(
-                f'  → Sent corrections, settling for {self.settle_time}s')
+                f'  → Sent corrections + transport, settling for {self.settle_time}s')
+            self.wait_until = self._now() + self.settle_time
+        elif self.transport_vx != 0.0 or self.transport_vy != 0.0:
+            # Infeasible but transporting: send transport-only (keep last z)
+            for i, name in enumerate(self.drone_names):
+                d = self.drones[i]
+                self._call_goto(name, d.x_bar + x_offset, d.y_bar + y_offset, self.last_sent_z[i])
+            self.get_logger().info(
+                f'  → Transport only (no z correction), settling for {self.settle_time}s')
             self.wait_until = self._now() + self.settle_time
 
         self.current_round += 1

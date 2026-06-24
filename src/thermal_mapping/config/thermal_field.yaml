@@ -1,0 +1,127 @@
+# Ground-truth thermal field for the simulated downward-facing sensor.
+# Loaded by every thermal_sensor_node at startup AND by scripts/preview_thermal_scenario.py.
+# Edit and relaunch — no rebuild.
+#
+# Two modes can coexist:
+#
+# 1. STATIC hot_spots — sum of 2D Gaussians added to ambient.
+#    T_static(x,y) = ambient + sum_i  peak_i * exp(-d_i^2 / (2 * radius_i^2))
+#
+# 2. DYNAMIC fire (M3 wavefront + burn profile) — single ignition, radial
+#    wavefront sweeps outward at v_front m/s; each cell follows a rise-plateau-
+#    decay burn profile keyed to time-since-front-arrival.
+#    T_fire(x,y,t) = peak_temperature * phi(tau),   tau = t - d/v_front
+#
+# The two are additive on top of `ambient`. Either block can be present or
+# absent.
+
+ambient: 22.0  # degC
+
+# Legacy static hot spots (DISABLED for dynamic fire scenario).
+# Leave commented out unless you want them ON TOP of the fire.
+hot_spots: []
+
+# Dynamic fire (M4) — wavefront + burn profile + wind-driven anisotropy.
+#
+# Design choices (2026-05-26 Phase A — wind iteration after symmetric-spread review):
+#   - arena_radius = 1.9 matches drone HW r_max (fixed, per user)
+#   - Ignition at (0, 0) — arena center, where all 4 sector wedges meet
+#   - v_front_base = 0.01 m/s with WIND ANISOTROPY a=0.5 → front advances:
+#       1.5x downwind (+x → cf1), 1x perpendicular (cf2/cf4), 0.5x upwind (-x → cf3)
+#     Front shape is ellipse stretched in +x. Sectors light up sequentially:
+#       Phase 1 (t≈0-80s):   cf1 dominant (downwind cells light up first)
+#       Phase 2 (t≈80-200s): cf2 + cf4 dual (perpendicular spread fills both)
+#       Phase 3 (t≈200-360s): cf3 dominant (upwind, slowest to ignite)
+#   - Wind asymmetry breaks the symmetric-wavefront problem where all sectors
+#     received fire simultaneously → q_i naturally concentrate by sector.
+#
+# Defensible against literature:
+#   - 0.01 m/s ~ low-intensity forest understory surface fire (range 0.01-0.05).
+#   - rise/plateau/decay 15s/30s/60s ~ eucalypt-forest residence times.
+#   - Wind-driven elliptical fire spread is the canonical model in wildfire
+#     simulators (see forefireAPI/forefire — Huygens wavefront with wind).
+fire:
+  ignition_point: [0.0, 0.0]       # arena center; all 4 sector wedges meet here
+  ignition_time: 0.0
+  v_front: 0.01                    # m/s — BASE front speed (modulated by wind)
+  peak_temperature: 80.0           # degC above ambient at burn peak
+  burn:
+    rise_duration: 10.0          # 50s total burn lifetime — thick band that walks through
+    plateau_duration: 15.0       # sectors. Each sector dominates for a substantial window,
+    decay_duration: 25.0         # making rise/fall behavior visible in q_i traces and
+                                 # showing the optimizer reallocate budget between drones.
+  random_seed: 42
+  arena_radius: 1.9                # fuel disc radius = drone HW r_max (fixed)
+  arena_center: [0.0, 0.0]
+  wind:
+    direction_deg: 0.0             # initial wind direction at t=0 (+x toward cf1)
+    rotation_rate_deg_per_sec: 0.25 # ROTATING wind: 90° over the 6-min run.
+                                   # 2026-05-26: SLOWED from 0.5 → 0.25 to make cf1↔cf2
+                                   # handoff sharper (cf1 has more time to build up r_1
+                                   # to r_star before the transition, so when wind shifts
+                                   # the optimizer must retract cf1 + grow cf2 → larger
+                                   # transient that baseline lags through more.
+                                   # Lifts baseline max Σc_i r² from ~8.45 → ~8.83.
+    anisotropy: 0.8                # STRONG asymmetry. 1.8x downwind, 0.2x upwind, 1x perp.
+                                   # Fire is a directional streak, not symmetric. As wind
+                                   # rotates, the streak rotates → ONE sector at a time
+                                   # is heavily heated → cleaner single-sector dominance,
+                                   # visible q_i and r_i^k handoffs.
+
+  # Firefighter radius-cap suppression (NEW 2026-05-26, REVISED to radius-cap).
+  # Paper narrative: the 1.9 m arena_radius is the firebreak ridge. In the
+  # cf3+cf4 arc, firefighters hold an INNER line at `max_radius` so the fire
+  # never reaches the ridge in those sectors. Visually: fire just "stops" at
+  # r=max_radius on the cf3/cf4 side; cf1/cf2 still burn out to the full
+  # 1.9 m ridge.
+  #
+  # Mechanics: cells whose angle from arena center falls inside the arc AND
+  # whose radius exceeds max_radius contribute zero. cf1/cf2 cells (outside
+  # the arc) are unaffected. A small angular taper smooths the boundary.
+  #
+  # Wind-lock: under `randomize_seed > 0` the arc center rotates by the SAME
+  # random offset as the wind init, so dominant-vs-suppressed labels stay
+  # consistent across seeds.
+  suppression:
+    # World-frame center direction of the arc. 225° = midpoint between cf3
+    # (180°) and cf4 (270°), covering the lower-left arc of the arena. If
+    # omitted, defaults to wind.direction_deg + 180 (upwind side).
+    center_deg: 225.0
+    half_angle_deg: 90.0           # 180° arc total. Covers cf3 (135–225°) AND cf4 (225–315°)
+                                   # sectors ENTIRELY. cf1 (midpoint 0°) and cf2 (90°) are
+                                   # >45° from the nearest arc edge — completely outside.
+    max_radius: 1.4                # Firefighter line at 1.4 m. Fire in cf3/cf4 sectors
+                                   # stops here instead of reaching arena_radius=1.9 m
+                                   # (visible 0.5 m "buffer" zone between fire and ridge).
+                                   # 2026-05-26: tuned from 1.0 → 1.4 to let cf3/cf4
+                                   # contribute more budget demand, pushing baseline max
+                                   # Σc_i r² from ~8.45 → ~8.83 (closer to the unsuppressed
+                                   # ~8.85 reference). Smaller → more dramatic visual but
+                                   # weaker cf3/cf4 q_i; larger → less visual difference.
+    edge_taper_deg: 5.0            # Linear taper across this angular band just outside the
+                                   # arc, interpolating effective_r_max from max_radius up
+                                   # to arena_radius. Avoids hard angular discontinuities.
+
+  # Randomization (NEW 2026-05-26). When 0 (default), behavior is fully
+  # deterministic and reproduces the locked paper figure. When > 0, applies
+  # a seeded rotation to the wind init (and to the suppression cone, keeping
+  # it wind-locked) plus a small uniform-disc jitter to the ignition point.
+  # Different seeds produce different dominant-sector sequences across the
+  # 4 drones — useful for RL training data variety.
+  randomize_seed: 0
+  ignition_jitter_radius: 0.15     # used only when randomize_seed > 0
+
+# q_i estimator (oracle):
+#   threshold = 0: q_i = scale * mean(T - ambient)  over all sector cells
+#   threshold > 0: q_i = scale * mean(T - ambient | T - ambient > threshold)
+#                   over hot cells only; q_i = 0 if no cells exceed threshold.
+#
+# threshold > 0 zeroes out cold sectors, which lets the optimizer concentrate
+# budget on active sectors (dominant drone reaches near r_star instead of
+# splitting budget with marginally-warm sectors).
+qi:
+  scale: 0.20        # calibrated for 50s burn + a=0.8: the strong directional streak
+                     # makes the fire narrower, so the mean over sector dilutes more.
+                     # α=0.18 restores q_i magnitudes to ~1.5-3 range so the constraint
+                     # Σc_i r² ≈ B at peak (chase story preserved).
+  threshold: 0.0     # mean-over-all-cells (NOT threshold — threshold flattens ratios)

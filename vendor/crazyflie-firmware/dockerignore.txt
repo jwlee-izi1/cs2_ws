@@ -1,0 +1,5 @@
+sitl_make/build/
+**/.git/
+**/__pycache__/
+**/*.pyc
+docs/

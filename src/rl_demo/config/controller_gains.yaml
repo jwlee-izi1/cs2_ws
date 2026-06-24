@@ -1,0 +1,34 @@
+# Locked-in controller gains for Phase B trajectory playback.
+# Derived from Phase A sweep (see exp1/tuning/summary.csv).
+#
+# Regime: stock Gazebo multicopter plugin (no plugin retune). The plugin
+# caps stable XY motion at ~0.3 m/s — beyond that the drone tumbles.
+# Strategy: play 2D RL trajectories at 0.3 m/s sim speed, fast-forward
+# the final video by 3.3× so playback looks like the policy's native 1 m/s.
+#
+# Best measured tracking at 0.3 m/s with these gains:
+#   max err:           0.112 m
+#   RMS:               0.096 m
+#   leg-1 steady-state:0.087 m
+#   no tumbles
+#
+# Applied at runtime by the executor via ROS2 param API on
+# /control_services_cf1 — the shared launch does not thread these
+# parameters through, so runtime set is the non-invasive path.
+
+/control_services_cf1:
+  ros__parameters:
+    kp_xy: 3.0
+    kd_xy: 0.3
+    kp_z: 2.0
+    kd_z: 0.0
+    kp_yaw: 1.0
+    max_vel_xy: 0.7
+    max_vel_z: 2.0
+
+# Playback-time policy-to-sim scaling:
+#   time_scale = policy_speed / sim_speed = 1.0 / 0.3 = 3.333
+#   So an executor consuming an RL NPZ with timestamps t_k must multiply
+#   every timestamp by time_scale when building the upload trajectory.
+#   After sim runs at the slowed cadence, speed the video up 3.333x with:
+#     ffmpeg -i recorded.mp4 -filter:v "setpts=0.3*PTS" -an out.mp4

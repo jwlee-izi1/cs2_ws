@@ -1,0 +1,220 @@
+# Single source of truth for the radial coverage demo geometry.
+# Loaded by both the planner launch and the optimizer launch.
+#
+# THREE RADII — keep distinct:
+#   r_max   : hardware box (physical cage minus margin). Static.
+#   r_star  : offline target standoff (the unconstrained optimum). Static.
+#   r_k     : per-round optimizer output (the leash). Dynamic, in [0, r_max].
+
+arena:
+  center_xy: [0.0, 0.0]
+  altitude: 0.6   # HW demo: takeoff to figure-8 z directly so streamer never drops the setpoint
+
+drone_names: [cf1, cf2, cf3, cf4]   # Stage 3b: full swarm
+
+sectors:
+  # HW envelope (2026-05-23 per multi_drone_hw_handoff.md §7.2):
+  #   The -Y wall is at ~y=-2.3 m; with takeoff offset + decel overshoot at speed, drones
+  #   must stay inside ~1.85-1.9 m radius. r_max DROPPED 2.3 -> 1.9 m (hard ceiling on
+  #   optimizer leash output).
+  #
+  # r_star (per-drone PREFERRED standoff): unified to 1.85 m for ALL drones (was asymmetric
+  # [2.0, 1.5, 1.0, 0.7]). Every drone equally prefers the cage edge — the fed_dcsa
+  # optimizer's budget constraint then becomes binding and squeezes drones based on
+  # priority weight `q`: cf1 (q=3.0) reaches near 1.85; cf4 (q=0.5) gets squeezed
+  # furthest below 1.85. Visual asymmetry now comes purely from `q`, not from r_star.
+  cf1: {phi_mid_deg:   0.0, phi_half_deg: 45.0, q: 10.0, c: 1.0, r_star: 1.85, r_max: 1.9}   # 2026-05-24: q bumped 3.0 -> 10.0; with B=8 gives KKT~1.78 (near cage edge) per 2D leash_only_demo validation
+  cf2: {phi_mid_deg:  90.0, phi_half_deg: 45.0, q: 1.5, c: 1.0, r_star: 1.85, r_max: 1.9}
+  cf3: {phi_mid_deg: 180.0, phi_half_deg: 45.0, q: 1.0, c: 1.0, r_star: 1.85, r_max: 1.9}
+  cf4: {phi_mid_deg: 270.0, phi_half_deg: 45.0, q: 0.5, c: 1.0, r_star: 1.85, r_max: 1.9}
+
+optimizer:
+  budget_B: 8.0          # 2026-05-24: loosened 7.0 -> 8.0 alongside q_1 bump (3->10).
+                         # With uniform r_star=1.85 and q=[10, 1.5, 1, 0.5], KKT gives
+                         # r ~= [1.78, 1.45, 1.31, 1.01] (validated to 4.4 cm precision in
+                         # 2D leash_only_demo, 23/100 rounds infeasible, clean convergence by k=30).
+                         # cf1 lands near cage edge (1.78 vs r_max=1.9). Spread cf1-cf4 = 0.77 m.
+  round_rate_hz: 0.5     # WALL-CLOCK rate of round publication. THE one knob to adjust in 3D
+                         # for physical lag — if drones can't finish a retraction before the
+                         # next leash arrives (chronic lag of 2+ rounds), drop to 1.0 Hz or lower.
+                         # Lowering round_rate_hz does NOT change algorithmic trajectory,
+                         # it only stretches wall-clock per round.
+  K: 200                 # 2026-06-02: bumped K=100 -> 200 per Phase 0 longer-episode verdict.
+                         # Rationale: at K=100 + round_rate_hz=0.5 the optimizer halts at sim
+                         # t=200s, but the fire model runs ~360s + ~25s decay tail. K=100 was
+                         # cutting off the Lagrangian transient TAIL — violation window 30s.
+                         # At K=200 -> sim t=400s, optimizer keeps adapting through the full
+                         # wind rotation (360s) plus a 40s decay tail buffer. Empirical data
+                         # from sweep_full Lagrangian: violation window grows from 30s -> 56s,
+                         # peak Σ_drone 8.57 -> 8.65, violation frames 83 -> 263.
+                         # See exp1/rl_training/phase0_eyeball/README.md.
+                         # The 2D matplotlib still uses K=100 at paper scale; this 3D demo
+                         # uses K=200 because the fire physics are longer-running.
+  stop_time_s: 260       # 2026-06-03: graceful demo stop — radial_coverage_node lands all
+                         # drones + latches /demo/stopped at t=260s (k=130 at round_rate 0.5);
+                         # planner/streamer then halt and the demo freezes. 0=off. K=200
+                         # (t=400) still bounds the optimizer; the stop fires first.
+  T: 5                   # inner gradient steps per round (matches 2D)
+
+  # Algorithm is a DIRECT PORT of the 2D matplotlib FedDCSAOptimizer at
+  #   /home/rk32226/drone-rl-2d/multi_drone/optimizer/fed_alloc.py
+  # Single DECAYING step size used for both feasible and infeasible rounds:
+  #     gamma_k = c_1 / sqrt(k+1)
+  # DECAYING gate tolerance:
+  #     eta_k = c_2 / sqrt(k+1)
+  # BOUNDED noise added to gradients (per Remark 1 of the paper):
+  #     zeta_i ~ Uniform[-noise_bound, +noise_bound]
+  #
+  # The earlier two-constant-step approach (eta_inner / eta_dual) was NOT what the 2D
+  # version does and produced a stable limit cycle (swings of ~0.5 m per cycle). The
+  # decaying schedule shrinks the swing to zero as k grows — same as the 2D matplotlib.
+  #
+  # 2D's tuned values at paper-scale geometry (r_max=20m, B=300, |G_tilde|_max ~ 1820):
+  #     c_1 = 0.015   (2D config note: was 0.005 initially -> too small;
+  #                    0.015 lands within 0.25 m of KKT by K=100)
+  #     c_2 = 30.0
+  #     noise_bound = 0.1
+  #
+  # Rescaling to our 3D geometry (r_max=2.3m, B=10, |G_tilde|_max ~ 11):
+  #   - c_1: nearly geometry-independent (per-step *fraction* of arena scales with the
+  #          gradient magnitude, which already encodes r_star/r_max). Start at 2D's 0.015.
+  #   - c_2: scales with max|G_tilde|. Ratio (3D/2D) ~ 11/1820 ~ 1/165 -> c_2 ~ 0.18.
+  #   - noise_bound: scales with gradient magnitude (2D grad_f peak ~84, ours ~12,
+  #          ratio ~0.14) -> noise_bound ~ 0.015.
+  #
+  # Final values come from a 2D matplotlib smoke test re-run with our rescaled constants.
+  c_1: 0.015             # placeholder, refine in 2D
+  c_2: 0.18              # placeholder, refine in 2D
+  noise_bound: 0.015     # placeholder, refine in 2D
+
+planner:
+  # The lawnmower mirrors the 2D matplotlib at /home/rk32226/drone-rl-2d/multi_drone/sim/drone.py:
+  # arcs are placed at rho_n = (2n - 1) * footprint_radius so consecutive annuli tile the
+  # radial extent with no overlap and no gap (each arc covers width 2*footprint).
+  # With FOV=15 deg at h=1m the sensor ground footprint side is ~0.26m, half = ~0.13m.
+  footprint_radius: 0.13  # half-width of one sensor footprint
+  inner_radius: 0.5       # inner endpoint of each spoke. With num_spokes=8 the angular gap
+                          # between cf1's last spoke and cf2's first spoke is 90/8 = 11.25 deg.
+                          # Cross-drone separation = 2 * r * sin(5.625 deg). At r=0.5 -> 0.098 m,
+                          # just above 9 cm drone diameter. Lowering inner_radius below 0.46 with
+                          # this many spokes causes tangling.
+  deadband: 0.10          # api compat (unused by spokes policy)
+  num_spokes: 8           # balanced choice: fewer than 10 -> faster visible cycle and looser
+                         # cross-drone separation (needed inner_radius drops from 0.6 to 0.46);
+                         # more than 6 -> tighter outer-radius angular gaps.
+  planner_rate_hz: 5.0    # rate at which /cfN/policy_target is published
+
+streamer:
+  setpoint_rate_hz: 20.0      # rate of /cfN/cmd_position publication
+  max_setpoint_velocity: 1.5  # Bumped from 1.2 → 1.5 (first speed-up step per the ladder below).
+                              # Tested per user. Unlocks figure8_speed up to 3.0 (peak 1.37 m/s).
+                              # max_setpoint_velocity / setpoint_rate_hz = 0.05 m/tick.
+                              # TUNABLE IN BOTH DIRECTIONS:
+                              #   too SLOW (can't see ping-pong, chronic lag) -> bump up
+                              #   too FAST (overshoot, cage scares, jittery) -> bump down
+                              # Retraction-time ladder (1.5 m retraction at 2 Hz optimizer):
+                              #   1.0 m/s -> 1.5 s = 3 rounds (default; conservative start)
+                              #   1.5 m/s -> 1.0 s = 2 rounds (first speed-up step)
+                              #   2.0 m/s -> 0.75 s ~= 1.5 rounds (punchy)
+                              #   3.0 m/s -> 0.5 s = 1 round (closest to 2D ideal; near safety ceiling)
+  takeoff_settle_sec: 4.0     # delay between /cfN/takeoff and arming the streamer
+
+sensor:
+  fov_deg: 35.0          # widened from 15 -> 25 -> 35 (2026-05-23) for better thermal coverage
+                         # under the figure-8 motion. At h=0.6m, footprint L=2*h*tan(fov/2)
+                         # = 0.378 m at 35 deg (was 0.158 m at 15 deg). Coverage per pass ~5.7x.
+
+# Per-drone quadrant config for the ALTERNATIVE figure-8 planner (quadrant_figure8_node).
+# Used by hw_multi_drone_verification.md Stages 3b/4. Selected via planner_type:=figure8
+# launch arg (default planner_type:=polar_lawnmower keeps the existing polar behaviour).
+#
+# TANGENTIAL LEASH-ARC SWEEP (2026-06-04 rewrite — replaces the old radial lemniscate):
+# The drone RIDES at radius r = r_frac*leash and sweeps SIDEWAYS (tangentially) along the
+# leash arc within its +-45 deg diagonal sector, driven by a smooth sinusoid:
+#   r   = r_frac * leash                          (radius PINNED at the leash)
+#   phi = phi_mid + sweep_amp * sin(2pi t/period) (tangential sweep; phi_mid from sign_x/sign_y)
+# Because r stays ~= leash, Sigma_drone = r_frac^2 * Sigma_leash by construction -> the
+# Lagrangian budget overshoot reaches the drones (DROPS) while FedDCSA stays clean. The old
+# lemniscate centered the drone at 0.707*leash (mean r 0.72*leash) -> Sigma_drone too low ->
+# no drops; that is why this was rewritten. All drones share ONE wall clock for the sweep
+# phase -> they shift angle together -> the 90 deg sector gaps are preserved -> never converge.
+figure8:
+  altitude: 0.6           # single height (HW vertical stagger NOT needed — sectors are
+                          # spatial-partition-safe at all leash values)
+  r_frac: 0.99            # pin drone radius at r_frac*leash -> Sigma_drone = 0.98*Sigma_leash.
+                          # Mirrors the RL hybrid's r_frac. Lag 0.98*8.83=8.65 > B_op=8.15 (DROPS);
+                          # Fed 0.98*8.0=7.84 < B_op=8.15 (clean). THIS is the demo contrast.
+  r_max: 1.9              # hard radial cap (matches sectors r_max; clamp only bites if r_frac>1)
+  sweep_amp_frac: 0.8     # tangential sweep amplitude = 0.8 * phi_half -> +-36 deg (mirrors RL SWEEP_CLIP)
+  phi_half_deg: 45.0      # angular half-width of each diagonal sector (+-45 deg wedge)
+  sweep_period_s: 9.0     # full sweep cycle. peak v_tan @r=1.8m = 1.8*0.628*(2pi/9) = 0.79 m/s
+                          # (< 1.5 m/s streamer cap -> no attenuation; ~ old figure-8's 0.92 m/s peak)
+  wobble_w: 0.0           # 0 = pure arc sweep (CHOSEN: max drop-fidelity). >0 (<=0.05) would trace a
+                          # tiny inward figure-8 hugging the arc, but weakens the drop margin.
+  min_leash: 0.4          # PLANNER SAFETY FLOOR: when optimizer leash < this (pre-fire, q~0 -> r~0),
+                          # hold the drone on its sector arc at r_frac*min_leash instead of diving to
+                          # origin. At 0.4: adjacent separation = 2*0.99*0.4*sin(45deg) = 0.56 m (BVC-safe;
+                          # all drones in-phase). /coverage/leash still carries the true r_i^k (paper OK).
+  # Only sign_x/sign_y matter now — they set each drone's sector centerline bearing
+  # phi_mid = atan2(sign_y, sign_x): cf1->45, cf2->-45(=315), cf3->225, cf4->135 deg.
+  # (figure8_yaw_deg is INERT after the tangential-sweep rewrite — kept for readability.)
+  quadrants:
+    cf1: {sign_x: +1, sign_y: +1, figure8_yaw_deg:  0.0}   # NE sector, phi_mid=45  (physical +x+y)
+    cf2: {sign_x: +1, sign_y: -1, figure8_yaw_deg:  0.0}   # SE sector, phi_mid=-45 (physical +x-y) — SWAPPED for HW placement
+    cf3: {sign_x: -1, sign_y: -1, figure8_yaw_deg:  0.0}   # SW sector, phi_mid=225 (physical -x-y)
+    cf4: {sign_x: -1, sign_y: +1, figure8_yaw_deg:  0.0}   # NW sector, phi_mid=135 (physical -x+y) — SWAPPED for HW placement
+
+# RL planner config (used when planner_type:=rl). The trained policy is
+# loaded from `checkpoint_path` (absolute path to ppo *.zip). The training
+# env's invariants are mirrored here:
+#   - action_slack=1.0   matches iter9 (strict — no overshoot past leash)
+#   - min_leash=0.4      matches the figure-8 safety floor
+#   - age_crop_size=32   matches the trained obs space
+#   - past_action_history=10 matches the trained obs space
+rl:
+  checkpoint_path: ""          # MUST be set at launch — abs path to ppo_coverage_*_final.zip
+  min_leash: 0.4               # 2026-06-03: 0.8→0.4 to MATCH the 2D. The 2D drone tracks the RAW
+                               # leash (pulls in to ~0.31m in cold sectors); the 0.8 floor held
+                               # cold-sector drones OUT → Σ_drone inflated over B_op → FedDCSA false
+                               # drops. 0.4 keeps drones off the origin (adjacent ≥~0.57m, safe) while
+                               # Σ_drone stays under B_op for FedDCSA. Lagrangian still crosses
+                               # B_op=8.15 (proven in 2D even without the floor).
+  action_slack: 1.0
+  episode_seconds: 360.0
+  age_crop_size: 32
+  past_action_history: 10
+  device: cpu                  # cpu is plenty for inference at 5 Hz
+  # 2026-06-05: receding-horizon streamer (streamer_type:=receding_horizon, default). Builds a
+  # smooth POLAR arc to the policy target each replan: r clamped <= leash (no overshoot) + C2
+  # quintic pieces + current-velocity graft (no jitter) + ends with the target's velocity
+  # (tracks the moving setpoint, no decel-to-0). Tracks the RL policy; does NOT generate the sweep.
+  streamer:
+    # 2026-06-05 retune (diagnosis: 1.5s horizon low-passed the policy sweep ±36->±15deg).
+    # Shorter horizon + faster replan -> the arc tracks the moving 5Hz policy_target with
+    # minimal easing -> recovers the sweep. Honest end-velocity feed-forward (alpha 0.9,
+    # clamp 1.5) so the arc doesn't decelerate into each target.
+    # 2026-06-05 CRUISE retune: the END knot is now a CONSTANT-SPEED tangential cruise
+    # (2D law omega = cruise_speed/r, rd1=0), PROJECTED one cruise-horizon ahead in the
+    # latched sweep direction and clamped to the policy target angle. Fixes the ~0.1 m/s
+    # ease-from-rest crawl (the old finite-diff END tangent sagged in the executed slice).
+    # NOTE: the cruise CAP (cruise_speed) only engages when the policy sweeps fast enough;
+    # with figure8.sweep_period_s=9.0 the drone faithfully tracks the policy at ~0.78 m/s
+    # peak. For a flat ~1.0-1.18 m/s 2D-like cruise, ALSO drop figure8.sweep_period_s -> ~5.0.
+    horizon_sec: 0.3           # cruise horizon H; arc length = cruise_speed*H (~0.71 m at 1.18 m/s)
+    replan_period: 0.2         # re-graft from current odom every policy tick (f = 0.2/0.6 = 0.33)
+    n_pieces: 4                # 0.6s/4 = 0.15s pieces; C2-smooth, small firmware upload
+    r_min: 0.3                 # polar floor (avoid omega=v/r blow-up near origin)
+    target_vel_alpha: 0.9      # (legacy) finite-diff EMA; END tangent no longer uses it
+    max_target_speed: 1.5      # (legacy) finite-diff clamp; END tangent no longer uses it
+    leash_margin: 0.0          # extra clamp below leash (m); 0 = clamp exactly at the leash
+    cruise_speed: 1.18         # tangential CRUISE speed (m/s), 2D drone_speed reference. At r~1.76
+                               # gives omega=0.67 rad/s. Validated: peak<=1.18, accel<=4.7 m/s^2,
+                               # zero overshoot (maxR 1.762<=leash 1.78). Raise toward 2.0 for the
+                               # literal 2D speed; lower to 1.0 for a calmer demo.
+    decel_horizon: 0.15        # seconds-of-cruise over which speed eases to 0 into the sector edge /
+                               # reversal. Kept << horizon_sec so a real full-speed cruise window
+                               # exists (rem in [5.7, 22.8] deg). Lower -> snappier (higher reversal
+                               # accel); higher -> gentler but eats the cruise window.
+    sign_deadband_deg: 3.0     # sweep-direction latch hysteresis; flip only when target is past this
+                               # angle on the other side -> no tick-to-tick sign chatter (3 deg for
+                               # HW EKF phi noise; drop to 2 in clean sim if reversals feel late).

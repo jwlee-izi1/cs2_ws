@@ -1,0 +1,44 @@
+diff --git a/cflib/crazyflie/localization.py b/cflib/crazyflie/localization.py
+index f032f11..fcadd73 100644
+--- a/cflib/crazyflie/localization.py
++++ b/cflib/crazyflie/localization.py
+@@ -54,6 +54,7 @@ class Localization():
+     # Implemented channels
+     POSITION_CH = 0
+     GENERIC_CH = 1
++    EXT_POSITION_PACKED_CH = 2
+ 
+     # Location message types for generig channel
+     RANGE_STREAM_REPORT = 0
+@@ -157,6 +158,31 @@ class Localization():
+                               quat[0], quat[1], quat[2], quat[3])
+         self._cf.send_packet(pk)
+ 
++    def send_extpos_packed(self, positions):
++        """
++        Send a batch of external positions for multiple Crazyflies in a single
++        CRTP packet on the EXT_POSITION_PACKED channel.
++
++        ``positions`` is an iterable of ``(id, x, y, z)`` where ``id`` is the
++        last byte of the target Crazyflie's radio address and x/y/z are in
++        meters. On the receiver, an entry whose id matches its own ``my_id`` is
++        treated as its own external position; every other entry is stored as a
++        neighbor (peer) position, which is what the on-board collision-avoidance
++        (BVC) module consumes. Up to 4 entries fit in one packet (7 bytes each).
++        """
++        pk = CRTPPacket()
++        pk.port = CRTPPort.LOCALIZATION
++        pk.channel = self.EXT_POSITION_PACKED_CH
++        data = bytearray()
++        for cf_id, x, y, z in positions:
++            data += struct.pack('<Bhhh',
++                                int(cf_id) & 0xFF,
++                                int(round(x * 1000.0)),
++                                int(round(y * 1000.0)),
++                                int(round(z * 1000.0)))
++        pk.data = bytes(data)
++        self._cf.send_packet(pk)
++
+     def send_short_lpp_packet(self, dest_id, data):
+         """
+         Send ultra-wide-band LPP packet to dest_id

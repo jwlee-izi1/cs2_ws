@@ -1,0 +1,190 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 0.5
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.02
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Marker Scale: 0.3
+      Name: TF
+      Value: true
+    - Alpha: 1.0
+      Autocompute Intensity Bounds: false
+      Class: grid_map_rviz_plugin/GridMap
+      Color: 200; 200; 200
+      Color Layer: thermal_truth
+      Color Transformer: IntensityLayer
+      Enabled: false
+      Height Layer: thermal_truth
+      Height Transformer: Flat
+      History Length: 1
+      Invert Rainbow: false
+      Max Color: 255; 80; 0
+      Max Intensity: 80
+      Min Color: 30; 30; 35
+      Min Intensity: 22
+      Name: GroundTruthFire
+      Show Grid Lines: false
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /thermal_truth
+      Use Rainbow: false
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: false
+      Class: grid_map_rviz_plugin/GridMap
+      Color: 200; 200; 200
+      Color Layer: thermal
+      Color Transformer: IntensityLayer
+      Enabled: true
+      Height Layer: thermal
+      Height Transformer: Flat
+      History Length: 1
+      Invert Rainbow: false
+      Max Color: 255; 0; 0
+      Max Intensity: 80
+      Min Color: 0; 0; 255
+      Min Intensity: 22
+      Name: ThermalMap
+      Show Grid Lines: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /thermal_map
+      Use Rainbow: true
+      Value: true
+    # Data-loss overlay — dropped layer is NaN where untouched, 0 where
+    # successful, 1 where dropped. Min Intensity tight against Max so only
+    # dropped (=1) cells render as WHITE; everything else falls below the
+    # Min Intensity and is rendered with Min Color (matched to the thermal
+    # baseline color so it's invisible against the heatmap).
+    - Alpha: 1.0
+      Autocompute Intensity Bounds: false
+      Class: grid_map_rviz_plugin/GridMap
+      Color: 0; 0; 255
+      Color Layer: dropped
+      Color Transformer: IntensityLayer
+      Enabled: true
+      Height Layer: dropped
+      Height Transformer: Flat
+      History Length: 1
+      Invert Rainbow: false
+      Max Color: 255; 255; 255   # white = dropped cells
+      Max Intensity: 1.0
+      Min Color: 0; 0; 255       # blue (matches thermal Min Color so non-dropped is invisible against thermal)
+      Min Intensity: 0.99        # everything < 0.99 renders at Min Color
+      Name: DroppedLayer
+      Show Grid Lines: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /thermal_map
+      Use Rainbow: false
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LeashCf1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cf1/coverage_state_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LeashCf2
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cf2/coverage_state_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LeashCf3
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cf3/coverage_state_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LeashCf4
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cf4/coverage_state_markers
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: ViolationStatusText
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /coverage/status_text
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: ViolationSpheres
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /coverage/violation_sphere
+      Value: true
+  Global Options:
+    Background Color: 30; 30; 35
+    Fixed Frame: world
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 6
+      Focal Point: {X: 0, Y: 0, Z: 0.5}
+      Name: Current View
+      Pitch: 1.4
+      Yaw: 1.5708
+      Target Frame: <Fixed Frame>
+Window Geometry:
+  Height: 800
+  Width: 1200

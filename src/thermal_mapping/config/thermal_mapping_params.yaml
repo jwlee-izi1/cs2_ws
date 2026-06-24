@@ -1,0 +1,47 @@
+# Runtime parameters for the thermal_mapping demo.
+# Sensor-node parameters (drone_name, field_yaml, fov, resolution, rate, etc.)
+# are passed per-instance from the launch file.
+
+/**:
+  ros__parameters:
+    # Crazyswarm2 + CrazySim doesn't bridge Gazebo /clock onto ROS, so leave
+    # this off — nodes use wall-clock and timers fire correctly.
+    use_sim_time: false
+
+thermal_mapper:
+  ros__parameters:
+    # drone_names: intentionally NOT set here — always provided by the launch file
+    # (thermal_mapping_demo.launch.py derives it from num_drones or drone_names arg).
+    # Setting it here would shadow the launch override and cause subtle bugs.
+    # If running standalone: pass --ros-args -p drone_names:='[cf1,cf2,cf3,cf4]'
+    frame_id: world
+    length_x: 5.0       # map extent along x (meters)
+    length_y: 5.0       # map extent along y (meters)
+    # 2026-06-05: 0.01 -> 0.05. 1cm = 250k-cell GridMap; rclpy DESERIALIZING that giant
+    # message (x4 rl_planner subscribers, GIL-held) starved each planner's 5Hz tick down to
+    # 0.9Hz -> undersampled sweep + cf2 crash cascade. 5cm = 10k cells (25x smaller msg).
+    # The policy obs is a 32x32 sector downsample (rl_planner._extract_age_crop) so it's
+    # preserved; q is a sector aggregate so it's robust to the coarser grid.
+    resolution: 0.05    # cell size (meters)
+    center_x: 0.0       # map center
+    center_y: 0.0
+    publish_rate_hz: 2.0
+    # Bucket C — per-frame Bernoulli drop at receive. 0.0 = no drops (default,
+    # bit-identical to pre-Bucket-C behavior). >0 = randomly drop incoming
+    # ThermalFrames; the drone's footprint at the drop instant is marked in
+    # the `dropped` GridMap layer for white-overlay rendering. Uses the
+    # drone's CURRENT pose (msg.pose), not the optimizer's leash r_i^k.
+    packet_drop_prob: 0.0
+    drop_seed: 42
+
+thermal_ground_truth:
+  ros__parameters:
+    # Truth GridMap covers the same arena extent but at a coarser resolution
+    # than the mapper (truth is visualization-only, doesn't need 1cm cells).
+    frame_id: world
+    length_x: 5.0
+    length_y: 5.0
+    resolution: 0.05    # 100x100 cells over 5x5m — RViz-fast, rosbag-light
+    center_x: 0.0
+    center_y: 0.0
+    publish_rate_hz: 2.0

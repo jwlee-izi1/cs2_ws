@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'fed_dcsa_coordinator = fed_dcsa.coordinator_node:main',
             'payload_optimizer = fed_dcsa.payload_optimizer_node:main',
+            'radial_coverage_node = fed_dcsa.radial_coverage_node:main',
         ],
     },
 )

@@ -179,9 +179,13 @@ def launch_setup(context, *args, **kwargs):
     drone_z = CONFIGS[config]
     poses   = compute_poses(drone_z)
 
-    # Read the SDF template
+    # Read the SDF template (override-able via world_file launch arg)
     world_share   = get_package_share_directory('cf_payload_world')
-    template_path = os.path.join(world_share, 'worlds', 'payload_world.sdf')
+    world_file    = LaunchConfiguration('world_file').perform(context)
+    if os.path.isabs(world_file):
+        template_path = world_file
+    else:
+        template_path = os.path.join(world_share, 'worlds', world_file)
     with open(template_path) as fh:
         sdf_text = fh.read()
 
@@ -262,6 +266,15 @@ def generate_launch_description():
             'paused',
             default_value='true',
             description='Start Gazebo paused (true) or running (false).',
+        ),
+        DeclareLaunchArgument(
+            'world_file',
+            default_value='payload_world.sdf',
+            description=(
+                'World SDF template filename (relative to package share/worlds/) or absolute path. '
+                'Default "payload_world.sdf" uses MulticopterVelocityControl. '
+                'Use "payload_world_crazysim.sdf" for the CrazySim variant.'
+            ),
         ),
         OpaqueFunction(function=launch_setup),
     ])

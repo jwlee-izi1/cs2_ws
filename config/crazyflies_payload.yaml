@@ -1,0 +1,51 @@
+# Multi-drone CrazySim config for the payload world.
+# Each drone gets its own SITL container on UDP cflib_port = 19850 + cf_id.
+# Initial positions match the four payload corners (see CONFIGS['level'] in
+# cf_payload_world/launch/payload_world.launch.py).
+fileversion: 3
+
+robots:
+  cf1:
+    enabled: true
+    uri: udp://127.0.0.1:19851
+    initial_position: [0.40, 0.24, 1.25]
+    type: cf21
+  cf2:
+    enabled: true
+    uri: udp://127.0.0.1:19852
+    initial_position: [-0.40, 0.24, 1.25]
+    type: cf21
+  cf3:
+    enabled: true
+    uri: udp://127.0.0.1:19853
+    initial_position: [-0.40, -0.24, 1.25]
+    type: cf21
+  cf4:
+    enabled: true
+    uri: udp://127.0.0.1:19854
+    initial_position: [0.40, -0.24, 1.25]
+    type: cf21
+
+robot_types:
+  cf21:
+    motion_capture:
+      enabled: false
+      tracking: "off"
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8
+      voltage_critical: 3.7
+
+# Per-drone tuning lives here. Defaults match free-flying CF2.1; for the coupled
+# payload system you may need to lower posCtlPid Kp values. See CRAZYSIM_MIGRATION.md.
+all:
+  firmware_params:
+    commander:
+      enHighLevel: 1
+    stabilizer:
+      estimator: 2     # complementary filter
+      controller: 1    # PID
+  firmware_logging:
+    enabled: false

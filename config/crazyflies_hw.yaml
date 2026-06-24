@@ -1,10 +1,35 @@
+# Hardware config — 4 CF2.1+ flying in a Vicon volume.
+# Vicon DataStream: 192.168.0.62:801 (set in config/motion_capture.yaml).
+# Mocap path: librigidbodytracker with default_single_marker (Path Z) — 1 retro
+# ball per drone, disambiguated by initial_position + dynamics. See plan at
+# ~/.claude/plans/i-want-to-start-quirky-adleman.md for the rationale.
+#
+# initial_position values are PLACEHOLDERS — update to match physical spawn
+# positions of each drone in the Vicon volume (origin = wherever your wand
+# L-frame zeroed it). Drones must be within ~50cm of these positions for
+# librigidbodytracker to assign IDs correctly at startup.
 fileversion: 3
 
 robots:
   cf1:
-    enabled: true
-    uri: radio://0/80/2M/E7E7E7E7E7
-    initial_position: [0.0, 0.0, 0.0]
+    enabled: true       # Stage 4 fed_dcsa demo — placed near origin in (+x,+y) quadrant
+    uri: radio://0/100/2M/E7E7E7E7E1
+    initial_position: [0.456, 0.034, 0.062]  # re-probed 2026-06-04 HW figure8 (cardinal, East/+X = cf1 q=10 on OPEN axis)
+    type: cf21
+  cf2:
+    enabled: true       # Stage 4 fed_dcsa demo — placed near origin in (+x,-y) quadrant
+    uri: radio://0/100/2M/E7E7E7E7E2
+    initial_position: [0.027, 0.391, 0.063]  # re-probed 2026-06-04 HW figure8 (cardinal, North/+Y)
+    type: cf21
+  cf3:
+    enabled: true       # Stage 4 fed_dcsa demo — placed near origin in (-x,-y) quadrant
+    uri: radio://0/100/2M/E7E7E7E7E3
+    initial_position: [-0.339, -0.007, 0.063]  # re-probed 2026-06-04 HW figure8 (cardinal, West/-X)
+    type: cf21
+  cf4:
+    enabled: true       # Stage 4 fed_dcsa demo — placed near origin in (-x,+y) quadrant
+    uri: radio://0/100/2M/E7E7E7E7E4
+    initial_position: [0.072, -0.402, 0.063]  # re-probed 2026-06-04 HW figure8 (cardinal, South/-Y)
     type: cf21
 
 robot_types:
@@ -17,7 +42,23 @@ robot_types:
     battery: { voltage_warning: 3.8, voltage_critical: 3.7 }
 
 all:
+  # BVC peer-position broadcast: the server tells each drone its neighbors'
+  # positions at this rate (Hz) via packed EXT_POSITION_PACKED CRTP, so the
+  # onboard collision avoidance (colAv below) actually has neighbors to avoid.
+  # 0 = off (crazyswarm2 default — which left BVC BLIND on HW: colAv.enable=1
+  # but no peer feed). Sourced from the firmware odom log (enabled below).
+  peer_broadcast_hz: 10.0   # BVC peer feed. 10 Hz (30 Hz was heavy). Re-seated dongle 2026-06-03.
   firmware_params:
     commander:  { enHighLevel: 1 }
-    stabilizer: { estimator: 2, controller: 2 }
-    locSrv:     { extPosStdDev: 0.001 }
+    stabilizer: { estimator: 2, controller: 1 }   # PID (1) — proven stable with single-marker mocap (Mellinger needs multi-marker for yaw)
+    locSrv:     { extPosStdDev: 0.01 }            # mocap trust — run-1 baseline (reverted 2026-06-04 from 0.02;
+                                                  # kalman maxPos/maxVel bound REMOVED — inert in redo7 + bounds the
+                                                  # estimate not the physical drone, so it can't stop a roof-hit)
+    # Buffered Voronoi Cell collision avoidance — ON for motion stages (3b/4); turn off for hover-only.
+    colAv:      { enable: 1 }
+  firmware_logging:
+    # Required for /cfN/odom — thermal_mapping subscribes to this for drone pose.
+    enabled: true
+    default_topics:
+      odom:
+        frequency: 20

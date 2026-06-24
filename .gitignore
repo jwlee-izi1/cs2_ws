@@ -32,3 +32,25 @@ Thumbs.db
 # External ROS2 dependencies (fetched via deps.repos)
 src/crazyswarm2/
 src/crazyflie-simulation/
+
+# External dependency clones (forks) — local edits preserved in vendor/DEPENDENCIES.md
+# Anchored to repo root so they do NOT match vendor/crazyflie-firmware/ etc.
+/crazyflie-firmware/
+/cflib-src/
+/.crazyswarm2-upstream-backup/
+
+# Experiment data & results (large/regenerable; added back selectively later)
+/exp1/
+/exp2/
+/fed_dcsa_logs/
+/cache/
+/drone_exp1*.csv
+*.mcap
+*.npz
+
+# Documents & installers (no PDFs per upload policy)
+*.pdf
+*.deb
+
+# Stray runtime artifacts
+/.gui_camera_pose.txt

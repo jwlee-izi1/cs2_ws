@@ -1,0 +1,109 @@
+diff --git a/simulator_files/gazebo/launch/sitl_multiagent_square.sh b/simulator_files/gazebo/launch/sitl_multiagent_square.sh
+index 2669143..df2c327 100644
+--- a/simulator_files/gazebo/launch/sitl_multiagent_square.sh
++++ b/simulator_files/gazebo/launch/sitl_multiagent_square.sh
+@@ -1,5 +1,6 @@
+ #!/bin/bash
+ function cleanup() {
++	docker ps -q --filter "name=cf2-" 2>/dev/null | xargs -r docker stop 2>/dev/null
+ 	pkill -x cf2
+ 	pkill -9 ruby
+ }
+@@ -43,7 +44,11 @@ function spawn_model() {
+     gz service -s /world/${world}/create --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 300 --req 'sdf_filename: "/tmp/'${MODEL}_${N}'.sdf", pose: {position: {x:'${X}', y:'${Y}', z: 0.5}}, name: "'${MODEL}_${N}'", allow_renaming: 1'
+ 	
+ 	echo "starting instance $N in $(pwd)"
+-	$build_path/cf2 $((19950+${N})) > out.log 2> error.log &
++	# Run cf2 in Ubuntu 22.04 container (FreeRTOS Posix port broken on 24.04 host).
++	docker rm -f cf2-${N} 2>/dev/null
++	docker run -d --rm --network=host --name cf2-${N} \
++		cf2-sitl:22.04 $((19950+${N})) 127.0.0.1 \
++		> out.log 2> error.log
+ 
+ 	popd &>/dev/null
+ }
+@@ -93,13 +98,52 @@ then
+ 	exit 1
+ fi
+ n=0
+-while [ $n -lt $num_vehicles ]; do
+-	denom=$(python3 -c "from math import ceil, sqrt; print(ceil(sqrt($num_vehicles)))")
+-	x_cord=$(($n%$denom))
+-	y_cord=$(($n/$denom - ($n%$denom)/$denom))
+-	spawn_model ${vehicle_model} $(($n)) $x_cord $y_cord
+-	n=$(($n + 1))
+-done
++# Optional: spawn drones at sector midpoints for the radial coverage demo.
++# When COVERAGE_4DRONE=1 and num_vehicles=4, spawn drones on the +x, +y, -x, -y axes
++# at radius COVERAGE_SPAWN_R (default 0.3 m). Index n=0..3 maps to cf_id 0..3
++# which becomes /cf1../cf4 (cf_id starts at 1 in crazyflies_sitl_multi.yaml).
++if [ "${COVERAGE_4DRONE:-0}" = "1" ] && [ "$num_vehicles" = "4" ]; then
++	# Two spawn layouts (selected by COVERAGE_SPAWN_LAYOUT):
++	#   "cardinal" — drones on the +x, +y, -x, -y axes at radius R.
++	#                Matches the RL coverage demo where sectors are centered at
++	#                phi_mid = 0°/90°/180°/270°. Each drone spawns at its own
++	#                sector centerline so it doesn't have to cross a neighbor's
++	#                wedge to reach its assignment.
++	#   "corners"  — drones at the 4 NE/SE/SW/NW corners at radius R (figure-8
++	#                quadrant centers). Matches the HW figure-8 demo where each
++	#                drone owns one (±x, ±y) quadrant.
++	# Default: "corners" (preserves the figure-8 / HW-mirroring behavior).
++	LAYOUT="${COVERAGE_SPAWN_LAYOUT:-corners}"
++	R="${COVERAGE_SPAWN_R:-0.42}"
++	if [ "$LAYOUT" = "cardinal" ]; then
++		# cf1 at +x, cf2 at +y, cf3 at -x, cf4 at -y. Inter-drone distance = R*sqrt(2).
++		Z="0.0"
++		SPAWN_X=("$R" "$Z" "-$R" "$Z")
++		SPAWN_Y=("$Z" "$R" "$Z" "-$R")
++	else
++		# corners (legacy / figure-8): cf1 (+x,+y), cf2 (+x,-y), cf3 (-x,-y), cf4 (-x,+y)
++		# Per-axis offset = R*sqrt(2)/2; inter-drone min = R*sqrt(2)... wait, the
++		# original constants below keep the previous offsets exactly.
++		XP=$(python3 -c "print( $R * 0.7071)")
++		XN=$(python3 -c "print(-$R * 0.7071)")
++		YP=$(python3 -c "print( $R * 0.7071)")
++		YN=$(python3 -c "print(-$R * 0.7071)")
++		SPAWN_X=("$XP" "$XP" "$XN" "$XN")
++		SPAWN_Y=("$YP" "$YN" "$YN" "$YP")
++	fi
++	while [ $n -lt $num_vehicles ]; do
++		spawn_model ${vehicle_model} $(($n)) ${SPAWN_X[$n]} ${SPAWN_Y[$n]}
++		n=$(($n + 1))
++	done
++else
++	while [ $n -lt $num_vehicles ]; do
++		denom=$(python3 -c "from math import ceil, sqrt; print(ceil(sqrt($num_vehicles)))")
++		x_cord=$(($n%$denom))
++		y_cord=$(($n/$denom - ($n%$denom)/$denom))
++		spawn_model ${vehicle_model} $(($n)) $x_cord $y_cord
++		n=$(($n + 1))
++	done
++fi
+ 
+ trap "cleanup" SIGINT SIGTERM EXIT
+ 
+diff --git a/simulator_files/gazebo/launch/sitl_singleagent.sh b/simulator_files/gazebo/launch/sitl_singleagent.sh
+index b451819..951e77a 100644
+--- a/simulator_files/gazebo/launch/sitl_singleagent.sh
++++ b/simulator_files/gazebo/launch/sitl_singleagent.sh
+@@ -1,5 +1,6 @@
+ #!/bin/bash
+ function cleanup() {
++	docker ps -q --filter "name=cf2-" 2>/dev/null | xargs -r docker stop 2>/dev/null
+ 	pkill -x cf2
+ 	pkill -9 ruby
+ }
+@@ -42,7 +43,12 @@ function spawn_model() {
+     gz service -s /world/${world}/create --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 300 --req 'sdf_filename: "/tmp/'${MODEL}_${N}'.sdf", pose: {position: {x:'${X}', y:'${Y}', z: 0.5}}, name: "'${MODEL}_${N}'", allow_renaming: 1'
+ 	
+ 	echo "starting instance $N in $(pwd)"
+-	$build_path/cf2 $((19950+${N})) > out.log 2> error.log &
++	# Run cf2 in an Ubuntu 22.04 container (FreeRTOS Posix port broken on Ubuntu 24.04 host).
++	# --network=host lets cf2 reach the host's Gazebo plugin on 127.0.0.1:19950.
++	docker rm -f cf2-${N} 2>/dev/null
++	docker run -d --rm --network=host --name cf2-${N} \
++		cf2-sitl:22.04 $((19950+${N})) 127.0.0.1 \
++		> out.log 2> error.log
+ 
+ 	popd &>/dev/null
+ }

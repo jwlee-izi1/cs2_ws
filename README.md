@@ -1,81 +1,94 @@
-# cs2_ws — Multi-Project Crazyflie ROS2 Workspace
+# cs2_ws — Multi-Project Crazyflie ROS 2 Workspace
 
-A ROS2 (Jazzy) workspace for multi-drone research using Bitcraze Crazyflie 2.1 quadrotors with Gazebo Harmonic simulation. This repo contains three research projects sharing a common Crazyflie simulation and control stack.
+A ROS 2 (Jazzy) workspace for multi-drone research using Bitcraze Crazyflie 2.1
+quadrotors with Gazebo Harmonic simulation, built on **CrazySim** (full Crazyflie
+firmware running as SITL in Docker, bridged to Gazebo) + Crazyswarm2. The same node
+code runs in sim and on real hardware unchanged.
+
+For workspace architecture, sim/HW invariants, hardware bringup, and conventions see
+**[CRAZYSIM_MIGRATION.md](CRAZYSIM_MIGRATION.md)**. For the doc-system protocol see
+**[CLAUDE.md](CLAUDE.md)**.
 
 ---
 
-## Projects
+## Active projects
 
-### 1. Distributed Surveillance — Fed-DCSA
-**Package:** [`src/fed_dcsa/`](src/fed_dcsa/)
+### 1. Federated Coverage (CoRL paper)
+**Doc:** [docs/federated_coverage.md](docs/federated_coverage.md) ·
+**Packages:** `fed_dcsa`, `coverage_optimizer_interfaces`, `cf_coverage_planner`,
+`baseline_optimizers` (uses `thermal_mapping` as data plane)
 
-Federated Distributed Constraint-Satisfaction Algorithm for multi-drone surveillance coverage. Drones are assigned to surveillance stations with battery-aware scheduling and autonomous swapping.
-
-- **Core algorithm:** `fed_dcsa/algorithm.py` — server-coordinated gate, projected gradient descent
-- **Coordinator node:** `fed_dcsa/coordinator_node.py` — orchestrates 4 stations, each with active+standby drone pair
-- **Config:** `config/fed_dcsa_params.yaml` — algorithm parameters (K, T, tau, energy rates)
-- **Experiments:** `scripts/run_numerical.py`, `run_drone_simulation.py`
-- **Docs:** `docs/parameter_tuning_guide.md` — comprehensive parameter relationships and tuning
+Distributed resource allocation with persistent safety guarantees. A federated
+optimizer publishes per-drone leashes $r_i^k$ at every round; per-drone planners
+turn the leash into Crazyswarm2 position commands via a polar coverage policy
+(being swapped for a learned RL policy — a work in progress, see below). The aggregate constraint
+$\sum_i c_i r_i^2 \le B$ holds at every algorithmic iterate.
 
 ```bash
-# Numerical analysis (no simulation needed)
-python3 src/fed_dcsa/scripts/run_numerical.py
-
-# Full Gazebo simulation
-ros2 launch fed_dcsa fed_dcsa_experiment.launch.py
+~/cs2_ws/scripts/coverage_restart.sh fed_dcsa
 ```
 
-### 2. Game-Theoretic Planning — MultiNash
-**Package:** [`src/multinash_cs2_bridge/`](src/multinash_cs2_bridge/)
+### 2. Thermal Mapping Demo
+**Doc:** [docs/thermal_mapping_demo.md](docs/thermal_mapping_demo.md) ·
+**Packages:** `thermal_mapping`, `thermal_mapping_interfaces`
 
-Bridge between Crazyswarm2 and an external Multi-Nash game-theoretic planner for cooperative multi-drone motion planning via Nash equilibrium seeking.
-
-- **Bridge node:** `multinash_cs2_bridge/multinash_bridge.py` — fetches drone poses via TF, calls external planner
-- **Execution modes:**
-  - `multinash_exec_cf1.py` — single drone
-  - `multinash_exec_two_cf_mnash.py` — two drones with MultiNash
-  - `multinash_exec_N_cf_mnash.py` — N drones with MultiNash
-  - `multinash_exec_N_cf_traj.py` — N drones, trajectory mode
-
-> **Note:** Requires external planner repo (`DronePotentialGame`) and a separate virtualenv (`.venv_multinash`).
-
-### 3. Cooperative Payload Transport
-**Package:** [`src/cf_payload_world/`](src/cf_payload_world/)
-
-Gazebo world with 4 Crazyflies carrying a rigid rectangular payload connected via ball-jointed rods. Used to validate coordinated hovering and tilt correction algorithms.
-
-- **World:** `worlds/payload_world.sdf` — 4 drones, 4 rods, 1 payload (50g)
-- **Launch:** `launch/payload_hover.launch.py` — Gazebo + bridge + 4 control nodes
-- **Configurations:** level (all drones same height) and tilted (~20 deg tilt)
-- **Test script:** `scripts/test_payload_hover.py` — sends go_to commands, records and plots z-evolution
-- **Tuning log:** `TUNING_LOG.md` — SDF parameters and ROS controller gains
+Multi-drone shared occupancy/heatmap demo. Each drone synthesises a 16×16 thermal
+sensor frame over a configured ground-truth field; a central mapper accumulates per-cell
+mean and publishes a unified `grid_map_msgs/GridMap`. Serves both as a standalone demo
+and as the data plane for the Federated Coverage project.
 
 ```bash
-# Launch payload hover (level configuration)
-ros2 launch cf_payload_world payload_hover.launch.py mode:=level
+~/cs2_ws/scripts/thermal_demo.sh up
+```
 
-# Launch payload hover (tilted configuration)
-ros2 launch cf_payload_world payload_hover.launch.py mode:=tilted
+### 3. Payload Coupling
+**Doc:** [docs/payload.md](docs/payload.md) ·
+**Package:** `cf_payload_world`
+
+4 Crazyflies cooperatively suspend a 200 g rectangular payload via ball-jointed rods.
+Plumbing complete; stable hover tuning open. Validates persistent-safety constraint
+enforcement against coupled multi-body physics.
+
+```bash
+ros2 launch cf_payload_world payload_hover_crazysim.launch.py
 ```
 
 ---
 
-## Workspace Structure
+## In progress / placeholder
+
+- **MultiNash bridge** (`src/multinash_cs2_bridge`) — bridge between Crazyswarm2 and an
+  external Multi-Nash game-theoretic planner. No doc yet.
+- **RL policy** (`src/rl_demo`) — a learned policy that replaces the hand-coded
+  lawnmower/figure-8 planner in `cf_coverage_planner` (deployed through
+  `rl_planner_node`). **Work in progress** — a semi-working PPO policy trains and
+  runs in sim today; we're actively improving it.
+
+Archived/abandoned projects (kept for git history) live under
+[`docs/archive/`](docs/archive/).
+
+---
+
+## Workspace structure
 
 ```
 cs2_ws/
-├── src/
-│   ├── fed_dcsa/                  # Project 1: Surveillance / resource allocation
-│   ├── multinash_cs2_bridge/      # Project 2: Game-theoretic planning
-│   ├── cf_payload_world/          # Project 3: Payload transport
-│   ├── crazyswarm2/               # [external] ROS2 Crazyflie driver stack
-│   ├── ros_gz_crazyflie/          # Modified fork — Gazebo integration + payload control tuning
-│   └── crazyflie-simulation/      # [external] Meshes and URDF descriptions
-├── config/                        # Crazyflie YAML configs (hw + sim)
-├── exp1/                          # Experiment 1 results (CSVs, GIFs)
-├── exp2/                          # Experiment 2 results (CSVs)
-├── deps.repos                     # External dependency manifest
-└── README.md
+├── CLAUDE.md                       # Auto-loaded doc protocol for any chat in this workspace
+├── CRAZYSIM_MIGRATION.md           # Workspace + infrastructure reference (start at §0)
+├── README.md                       # This file (GitHub-facing intro)
+├── docs/                           # Per-project docs
+│   ├── federated_coverage.md
+│   ├── thermal_mapping_demo.md
+│   ├── payload.md
+│   └── archive/                    # Abandoned/legacy docs
+├── src/                            # ROS 2 packages (see CRAZYSIM_MIGRATION.md §1.6)
+├── config/                         # Crazyflie YAML configs (sim + hardware)
+├── scripts/
+│   ├── thermal_demo.sh             # Thermal mapping demo bringup
+│   ├── coverage_restart.sh         # Federated coverage demo bringup
+│   └── THERMAL_DEMO.md             # Thermal demo skill doc
+├── crazyflie-firmware/             # CrazySim fork (cf2 SITL + Gazebo plugin)
+└── cflib-src/                      # Editable cflib install
 ```
 
 ---
@@ -83,52 +96,41 @@ cs2_ws/
 ## Setup
 
 ### Prerequisites
-- ROS2 Jazzy
+- ROS 2 Jazzy
 - Gazebo Harmonic
+- Docker (for cf2-sitl:22.04 container — see CRAZYSIM_MIGRATION.md §4 "One-time setup")
 - Python 3.10+
-- [`vcs` tool](https://github.com/dirk-thomas/vcstool) (`pip install vcstool`)
 
-### Clone and build
+### Build
 
 ```bash
-# Clone the repo
 git clone git@github.com:ramank3/cs2_ws.git
 cd cs2_ws
 
-# Fetch external dependencies
+# External dependencies
 vcs import < deps.repos
-
-# Initialize submodules inside crazyswarm2 (needed for crazyflie_tools)
 cd src/crazyswarm2 && git submodule update --init --recursive && cd ../..
 
-# Install ROS dependencies
+# ROS deps
 rosdep install --from-paths src --ignore-src -r -y
 
-# Build
+# Build cf2 SITL Docker image (one-time)
+docker build --network=host -f crazyflie-firmware/Dockerfile.cf2-sitl -t cf2-sitl:22.04 crazyflie-firmware/
+
+# Build the workspace
 colcon build --symlink-install
 source install/setup.bash
 ```
 
----
-
-## ros_gz_crazyflie (Modified Fork)
-
-This repo includes a modified version of [knmcguire/ros_gz_crazyflie](https://github.com/knmcguire/ros_gz_crazyflie) with the following additions to `control_services.py`:
-
-- `kd_z` / `kd_xy` derivative damping parameters (stock only has proportional)
-- Auto-hover on startup (holds spawn position on first odom message)
-- `max_vel_z` clamping (2.0 m/s)
-- Runtime-tunable gains via `ros2 param set`
-
-These changes are required for stable payload hovering. See [`src/cf_payload_world/TUNING_LOG.md`](src/cf_payload_world/TUNING_LOG.md) for details.
+See [CRAZYSIM_MIGRATION.md §4 "One-time setup"](CRAZYSIM_MIGRATION.md) for the full
+recipe (Docker socket ACL, cflib editable install, etc.).
 
 ---
 
-## External Dependencies
-
-Fetched automatically via `deps.repos`:
+## External dependencies
 
 | Package | Source | Purpose |
-|---------|--------|---------|
-| [crazyswarm2](https://github.com/IMRCLab/crazyswarm2) | IMRCLab | ROS2 Crazyflie driver, interfaces, Python API |
+|---|---|---|
+| [crazyswarm2 (CrazySim fork)](https://github.com/llanesc/crazyswarm2/tree/crazysim) | llanesc | ROS 2 Crazyflie driver with UDP backend for CrazySim |
 | [crazyflie-simulation](https://github.com/bitcraze/crazyflie-simulation) | Bitcraze | URDF/mesh assets |
+| [crazyflie-firmware (CrazySim fork)](https://github.com/llanesc/crazyflie-firmware/tree/crazysim) | llanesc | Crazyflie firmware compiled as SITL Linux binary + Gazebo plugin |
