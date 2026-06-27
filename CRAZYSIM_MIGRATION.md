@@ -609,12 +609,40 @@ If you ever set this up on a fresh box, here's the recipe:
    cd ~/cs2_ws/crazyflie-firmware
    docker build --network=host -f Dockerfile.cf2-sitl -t cf2-sitl:22.04 .
    ```
+   Two things bite a fresh clone here — both already handled by the files copied in
+   from `vendor/` (see [vendor/DEPENDENCIES.md](vendor/DEPENDENCIES.md)), listed so you
+   know *why* if you ever regenerate them:
+   - **`python: not found`** during the in-container `make` — the firmware's
+     `tools/make/versionTemplate.py` is invoked as bare `python`, but `ubuntu:22.04`
+     ships only `python3`. **Fix:** the bundled `Dockerfile.cf2-sitl` already installs
+     `python-is-python3` (don't re-add it — it's in the vendored Dockerfile).
+   - **`git rev-parse HEAD … exit status 128`** while generating `version.c` — the
+     bundled `.dockerignore` excludes `.git` (so the 490 MB history isn't shipped into
+     the image), but `versionTemplate.py` then can't read the revision from git. **Fix:**
+     its intended no-git fallback is a `build_info.json` at the firmware root. Create it
+     before building (it's gitignored, so it isn't part of the fork — that's why a fresh
+     clone lacks it):
+     ```bash
+     echo '{"tag": "crazysim-aa6571dc"}' > ~/cs2_ws/crazyflie-firmware/build_info.json
+     ```
 4. **Build the host-side firmware + Gazebo plugin** (one-time):
    ```bash
+   source /opt/ros/jazzy/setup.bash          # REQUIRED before cmake — see note below
    cd ~/cs2_ws/crazyflie-firmware
    mkdir -p sitl_make/build && cd sitl_make/build
    cmake .. && make all -j
    ```
+   - **`Could not find … "gz-plugin"` (gz-plugin2 / gz-sim8) at cmake configure** — on
+     this box Gazebo Harmonic is installed via the ROS `ros-jazzy-gz-*-vendor` packages,
+     so its CMake config files live under the **ROS prefix**
+     (`/opt/ros/jazzy/opt/gz_*_vendor/...`), not `/usr`. **Fix:** `source
+     /opt/ros/jazzy/setup.bash` *before* cmake so the gz vendor dirs land on
+     `CMAKE_PREFIX_PATH`. (This is build-time only; don't add it to `~/.bashrc` — see
+     [§ env.sh](#env-sourcing-runtime).)
+   - Same bare-**`python`** issue as the Docker build, but on the *host* this time
+     (host also has only `python3`). **Fix:** `sudo apt install python-is-python3`. If
+     you can't `sudo`, a user-local shim works: `mkdir -p ~/.local/bin && ln -sf
+     "$(which python3)" ~/.local/bin/python` (ensure `~/.local/bin` is on `PATH`).
 5. **Install `cflib` from source** (the latest pip release lacks the new UDP driver).
    ⚠️ Clone into `~/cs2_ws/cflib-src` (NOT `/tmp/cflib-src`) — `/tmp` is wiped on reboot, which leaves the editable install pointing at a missing path and crazyflie_server crashes with `ModuleNotFoundError: No module named 'cflib'`:
    ```bash
@@ -624,12 +652,60 @@ If you ever set this up on a fresh box, here's the recipe:
    <conda-or-system>/bin/pip uninstall -y cflib
    SETUPTOOLS_SCM_PRETEND_VERSION=0.1.31 <conda-or-system>/bin/pip install -e .
    ```
-6. **Build the workspace:**
+   ⚠️ Install into **system Python** (or `--break-system-packages` on 24.04, which is
+   externally-managed): the ROS `crazyflie_server` imports `cflib` from system Python,
+   not from a conda env. The `extpos-packed` patch (BVC) must be present — verify with
+   `python3 -c "from cflib.crazyflie.localization import Localization; print(hasattr(Localization,'send_extpos_packed'))"` → `True`.
+6. **Keep colcon out of the root forks.** `crazyflie-firmware/` and `cflib-src/` sit at
+   the workspace root (siblings of `src/`), so a bare `colcon build` recurses into them
+   and aborts with `Duplicate package names not supported: CMSISDSP` (from the firmware's
+   `vendor/CMSIS`). They're built outside colcon (cmake in step 4, pip in step 5), so mark
+   them ignored — one-time:
+   ```bash
+   touch ~/cs2_ws/crazyflie-firmware/COLCON_IGNORE ~/cs2_ws/cflib-src/COLCON_IGNORE
+   ```
+7. **Install ROS dependencies** (`rosdep`). The `src/` packages pull a handful of system
+   packages not in a base Jazzy install; without them `colcon` fails (e.g. `crazyflie`
+   errors `Could not find … "motion_capture_tracking_interfaces"`):
+   ```bash
+   source /opt/ros/jazzy/setup.bash
+   rosdep update                                              # user-level, no sudo
+   rosdep install --from-paths src --ignore-src -r -y         # runs sudo apt under the hood
+   ```
+   On this box that resolves to 5 packages — install them directly if `rosdep`'s sudo
+   step is unavailable:
+   ```bash
+   sudo apt install -y \
+     ros-jazzy-motion-capture-tracking-interfaces \
+     ros-jazzy-grid-map-msgs ros-jazzy-grid-map-rviz-plugin \
+     ros-jazzy-tf-transformations ros-jazzy-joint-state-publisher-gui
+   ```
+8. **Build the workspace:**
    ```bash
    cd ~/cs2_ws
-   colcon build
+   source /opt/ros/jazzy/setup.bash      # gz vendor + ament on CMAKE_PREFIX_PATH
+   colcon build --symlink-install
    source install/setup.bash
    ```
+   Expect `Summary: 17 packages finished`. For day-to-day sourcing use
+   [`env.sh`](#env-sourcing-runtime) instead of the two `source` lines.
+
+<a id="env-sourcing-runtime"></a>
+### Sourcing the environment to run (`env.sh`)
+
+Every run terminal needs both the ROS underlay and this workspace's overlay. Instead of
+typing two `source` lines per shell, source the bundled `~/cs2_ws/env.sh`:
+
+```bash
+source ~/cs2_ws/env.sh        # = source /opt/ros/jazzy/setup.bash + source install/setup.bash
+ros2 pkg list | grep crazyflie   # sanity: crazyflie / crazyflie_interfaces / crazyflie_sim …
+```
+
+⚠️ **Do NOT add this to `~/.bashrc`** (or any global auto-source). Auto-sourcing ROS in
+every shell collides with the conda env we install later, and global env edits have bitten
+this box before (the GPU-env / GNOME-login incident). Source `env.sh` explicitly per
+terminal. GPU is likewise never set globally — it's applied narrowly via the `gz-gpu`
+wrapper only at sim-run time.
 
 ---
 
