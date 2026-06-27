@@ -323,9 +323,11 @@ Three edits, captured as patches in [vendor/](vendor/DEPENDENCIES.md):
 | `sitl_make/CMakeLists.txt` (+`collision_avoidance.c`) | **sim only** | compile the CA module into the SITL firmware (HW build already had it) |
 | `src/modules/src/stabilizer.c` (remove `#ifndef CONFIG_PLATFORM_SITL`) | **sim only** | let `collisionAvoidanceUpdateSetpoint()` run in sim (was HW-only) |
 | `cflib .../localization.py` (`send_extpos_packed`, `EXT_POSITION_PACKED` ch) | **both** | pack peer `(id,x,y,z)` into one CRTP packet so each drone learns its neighbors' positions — the data BVC consumes; identical mechanism over sim UDP or real radio |
+| `crazyswarm2 crazyflie_server.py` (peer broadcast) | **both** | the trigger: server broadcasts each drone its neighbors' poses at `peer_broadcast_hz` (set under `all:` in the crazyflies yaml) via `send_extpos_packed`. Without it the firmware sees no neighbors and BVC does nothing |
 
 The forks themselves are external clones (not in this repo); the patch recipe + pinned
-commits are in [vendor/DEPENDENCIES.md](vendor/DEPENDENCIES.md).
+commits are in [vendor/DEPENDENCIES.md](vendor/DEPENDENCIES.md). The three BVC legs span all
+three forks — firmware (run it), cflib (pack peers), crazyswarm2 server (broadcast peers).
 
 ---
 
@@ -582,6 +584,13 @@ CONTAINERS (Ubuntu 22.04, --network=host, 1 per drone):
 ---
 
 ## One-time setup (already done on this machine)
+
+> **External forks first.** The `crazyflie-firmware`, `cflib-src`, and `src/crazyswarm2`
+> clones are not in this repo (they are gitignored external forks with small local edits).
+> Before the steps below, clone all three at their pinned commits and apply the patches per
+> [vendor/DEPENDENCIES.md](vendor/DEPENDENCIES.md) — that also copies `Dockerfile.cf2-sitl`
+> into `crazyflie-firmware/`. **`deps.repos`'s crazyswarm2 entry is the llanesc `crazysim`
+> fork** (UDP backend), not upstream IMRClab.
 
 If you ever set this up on a fresh box, here's the recipe:
 

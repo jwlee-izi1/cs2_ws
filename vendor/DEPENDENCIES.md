@@ -1,12 +1,15 @@
 # External dependencies (forks) — not committed; reproduce from here
 
-Two upstream projects are cloned into the workspace at runtime but are **not** part of
+Three upstream projects are cloned into the workspace at runtime but are **not** part of
 this git repo (they are large and are their own git repositories):
 
 - `crazyflie-firmware/` — the cf2 SITL firmware + Gazebo bridge (CrazySim)
 - `cflib-src/` — Bitcraze `cflib`, installed editable so crazyswarm2 can talk over UDP
+- `src/crazyswarm2/` — the **llanesc fork** (UDP backend for CrazySim). **`deps.repos`
+  points at upstream `IMRCLab/crazyswarm2@main` as a base, but you must use the llanesc
+  `crazysim` fork below** — IMRClab main has no UDP backend and won't reach the SITL firmware.
 
-They are `.gitignore`d (same as `src/crazyswarm2/` and `src/crazyflie-simulation/`). Our
+They are `.gitignore`d. Our
 **local edits** to them are small and intentional, so they are preserved here as patches +
 copied files. To rebuild the environment on a fresh machine, clone each at its pinned
 commit and apply the patch(es) below.
@@ -48,6 +51,20 @@ git apply /path/to/vendor/cflib/extpos-packed.patch
 # then editable install per CRAZYSIM_MIGRATION.md "One-time setup" step 5
 ```
 
+## 3. crazyswarm2 (use this fork, NOT the one in deps.repos)
+
+```bash
+# Replaces the IMRCLab/crazyswarm2 entry in deps.repos.
+rm -rf src/crazyswarm2
+git clone https://github.com/llanesc/crazyswarm2.git src/crazyswarm2
+cd src/crazyswarm2
+git checkout crazysim          # pinned commit: 94df3be
+git submodule update --init --recursive
+# local edit: server-side BVC peer-position broadcast (the orchestrator of BVC)
+git apply /path/to/vendor/crazyswarm2/bvc-peer-broadcast.patch
+cd ../..
+```
+
 ---
 
 ## What each edit does (and is it sim, hardware, or both?)
@@ -64,6 +81,7 @@ Gazebo before flying. See `../CRAZYSIM_MIGRATION.md §1.7`.
 | `sitl-bvc.patch` → `sitl_make/CMakeLists.txt` | **sim only** | add `collision_avoidance.c` to the SITL build sources (the hardware build already compiled it) |
 | `sitl-bvc.patch` → `src/modules/src/stabilizer.c` | **sim only** | remove the `#ifndef CONFIG_PLATFORM_SITL` guard so `collisionAvoidanceUpdateSetpoint()` runs in sim too (it was hardware-only) |
 | `extpos-packed.patch` → `cflib/crazyflie/localization.py` | **both** | adds `send_extpos_packed()` + the `EXT_POSITION_PACKED` channel: packs each drone's `(id, x, y, z)` into one CRTP packet so every drone learns its **neighbors'** positions — the data BVC consumes. Used in sim and on hardware alike (transport-agnostic: travels over sim UDP or real radio) |
+| `bvc-peer-broadcast.patch` → `crazyswarm2 crazyflie_server.py` | **both** | the orchestrator: the server tracks each drone's latest pose and, at `peer_broadcast_hz` (set under `all:` in the crazyflies yaml), calls `send_extpos_packed()` to give each drone ONLY its neighbors (distinct ids 1..N, never the firmware `my_id`). Without it the firmware sees `nOthers=0` and BVC does nothing |
 
 ## Pinned versions
 
@@ -71,3 +89,4 @@ Gazebo before flying. See `../CRAZYSIM_MIGRATION.md §1.7`.
 |---|---|---|---|
 | crazyflie-firmware | `github.com/llanesc/crazyflie-firmware` | `crazysim` | `aa6571dc` |
 | cflib-src | `github.com/bitcraze/crazyflie-lib-python` | `master` | `c8bf364` |
+| src/crazyswarm2 | `github.com/llanesc/crazyswarm2` | `crazysim` | `94df3be` |

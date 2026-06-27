@@ -1,0 +1,166 @@
+diff --git a/crazyflie/scripts/crazyflie_server.py b/crazyflie/scripts/crazyflie_server.py
+index 07df1c9..a179336 100755
+--- a/crazyflie/scripts/crazyflie_server.py
++++ b/crazyflie/scripts/crazyflie_server.py
+@@ -136,6 +136,19 @@ class CrazyflieServer(Node):
+                     self.uri_dict[crazyflie] = uri
+                     self.type_dict[uri] = type_cf
+ 
++        # --- BVC peer-position broadcast (feeds on-board collision avoidance) ---
++        # When peer_broadcast_hz > 0 (set under `all:` in the crazyflies yaml) the
++        # server periodically tells each Crazyflie where its neighbors are via a
++        # packed EXT_POSITION_PACKED CRTP packet. Without this, the firmware's
++        # collision avoidance (BVC) sees no neighbors (nOthers=0) and does nothing.
++        self._peer_broadcast_hz = float(
++            self._ros_parameters.get('all', {}).get('peer_broadcast_hz', 0.0))
++        self._peer_latest_pos = {}   # cf_name -> (x, y, z)
++        # Peer id = the byte the firmware compares against its own my_id. SITL gives
++        # every drone the same my_id (0xE7), so we assign distinct ids 1..N (never
++        # 0xE7) and send each drone ONLY its peers, so a drone is never its own peer.
++        self._peer_id = {self.cf_dict[u]: i + 1 for i, u in enumerate(self.uris)}
++
+         # Setup Swarm class cflib with connection callbacks and open the links
+         factory = CachedCfFactory(rw_cache="./cache")
+         self.swarm = Swarm(self.uris, factory=factory)
+@@ -262,6 +275,12 @@ class CrazyflieServer(Node):
+         try:
+             self.time_open_link = self.get_clock().now().nanoseconds * 1e-9
+             self.swarm.open_links()
++            if self._peer_broadcast_hz > 0.0:
++                self.create_timer(1.0 / self._peer_broadcast_hz,
++                                  self._broadcast_peer_positions)
++                self.get_logger().info(
++                    f"BVC peer-position broadcast ON at {self._peer_broadcast_hz:.0f} Hz "
++                    f"(peer ids {self._peer_id})")
+         except Exception as e:
+             # Close node if one of the Crazyflies can not be found
+             self.get_logger().info("Error!: One or more Crazyflies can not be found. ")
+@@ -604,6 +623,26 @@ class CrazyflieServer(Node):
+             self.get_logger().info("Could not publish scan message, stopping scan log")
+             self.swarm._cfs[uri].logging["scan_log_config"].stop()
+ 
++    def _broadcast_peer_positions(self):
++        """Tell each Crazyflie where its neighbors are, so the on-board
++        collision-avoidance (BVC) module has peer positions to work with.
++
++        Sends each drone ONLY its peers (its own position already comes from its
++        estimator). Peers are tagged with a distinct id (1..N) that never equals
++        the firmware my_id, so a drone never mistakes itself for a neighbor.
++        """
++        for uri in self.uris:
++            name = self.cf_dict[uri]
++            peers = [(self._peer_id[other], px, py, pz)
++                     for other, (px, py, pz) in self._peer_latest_pos.items()
++                     if other != name]
++            if not peers:
++                continue
++            try:
++                self.swarm._cfs[uri].cf.loc.send_extpos_packed(peers)
++            except Exception:
++                pass
++
+     def _log_pose_data_callback(self, timestamp, data, logconf, uri):
+         """
+         Once pose data is retrieved from the Crazyflie,
+@@ -615,6 +654,7 @@ class CrazyflieServer(Node):
+         x = data.get('stateEstimate.x')
+         y = data.get('stateEstimate.y')
+         z = data.get('stateEstimate.z')
++        self._peer_latest_pos[cf_name] = (x, y, z)
+         roll = radians(data.get('stabilizer.roll'))
+         pitch = radians(-1.0 * data.get('stabilizer.pitch'))
+         yaw = radians(data.get('stabilizer.yaw'))
+@@ -662,6 +702,7 @@ class CrazyflieServer(Node):
+         x = data.get('stateEstimate.x')
+         y = data.get('stateEstimate.y')
+         z = data.get('stateEstimate.z')
++        self._peer_latest_pos[cf_name] = (x, y, z)
+         yaw = radians(data.get('stabilizer.yaw'))
+         roll = radians(data.get('stabilizer.roll'))
+         pitch = radians(data.get('stabilizer.pitch'))
+@@ -1059,8 +1100,12 @@ class CrazyflieServer(Node):
+         if uri == "all":
+             upload_success_all = True
+             for link_uri in self.uris:
+-                trajectory_mem = self.swarm._cfs[link_uri].cf.mem.get_mems(
+-                    MemoryElement.TYPE_TRAJ)[0]
++                _mems = self.swarm._cfs[link_uri].cf.mem.get_mems(MemoryElement.TYPE_TRAJ)
++                if not _mems:  # dead/unsynced link -> no traj memory; skip, don't crash the server (2026-06-03)
++                    self.get_logger().warn(f"[{self.cf_dict[link_uri]}] no trajectory memory (link down?) -> upload skipped")
++                    upload_success_all = False
++                    continue
++                trajectory_mem = _mems[0]
+                 trajectory_mem.trajectory = trajectory
+                 upload_result = trajectory_mem.write_data_sync()
+                 if not upload_result:
+@@ -1070,17 +1115,18 @@ class CrazyflieServer(Node):
+                     self.swarm._cfs[link_uri].cf.high_level_commander.define_trajectory(
+                         id, offset, len(trajectory))
+             if upload_success_all is False:
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+         else:
+-            trajectory_mem = self.swarm._cfs[uri].cf.mem.get_mems(
+-                MemoryElement.TYPE_TRAJ)[0]
++            _mems = self.swarm._cfs[uri].cf.mem.get_mems(MemoryElement.TYPE_TRAJ)
++            if not _mems:  # dead/unsynced link -> no traj memory; fail gracefully, don't crash (2026-06-03)
++                self.get_logger().warn(f"[{self.cf_dict[uri]}] no trajectory memory (link down?) -> upload failed")
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
++            trajectory_mem = _mems[0]
+             trajectory_mem.trajectory = trajectory
+             upload_result = trajectory_mem.write_data_sync()
+             if not upload_result:
+                 self.get_logger().info(f"[{self.cf_dict[uri]}] Upload failed")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+             self.swarm._cfs[uri].cf.high_level_commander.define_trajectory(
+                 id, offset, len(trajectory))
+ 
+@@ -1227,8 +1273,7 @@ class CrazyflieServer(Node):
+             except rclpy.exceptions.ParameterNotDeclaredException:
+                 self.get_logger().info(
+                     f"[{self.cf_dict[uri]}] No logblock of {topic_name} has been found ")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+         else:
+             try:
+                 self.swarm._cfs[uri].logging["custom_log_groups"][topic_name]["log_config"].stop(
+@@ -1240,8 +1285,7 @@ class CrazyflieServer(Node):
+             except rclpy.exceptions.ParameterNotDeclaredException:
+                 self.get_logger().info(
+                     f"[{self.cf_dict[uri]}] No logblock of {topic_name} has been found ")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+ 
+         response.success = True
+         return response
+@@ -1267,8 +1311,7 @@ class CrazyflieServer(Node):
+             except rclpy.exceptions.ParameterAlreadyDeclaredException:
+                 self.get_logger().info(
+                     f"[{self.cf_dict[uri]}] The content the logging of {topic_name} has already started ")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+         else:
+             try:
+                 self.declare_parameter(
+@@ -1303,13 +1346,11 @@ class CrazyflieServer(Node):
+                     self.cf_dict[uri] + ".logs." + topic_name + ".frequency.")
+                 self.undeclare_parameter(
+                     self.cf_dict[uri] + ".logs." + topic_name + ".vars.")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+             except rclpy.exceptions.ParameterAlreadyDeclaredException:
+                 self.get_logger().error(
+                     f"[{self.cf_dict[uri]}] The content or part of the logging of {topic_name} has already started ")
+-                response.success = False
+-                return response
++                return response   # UploadTrajectory response has NO fields — setting .success crashed the server (fixed 2026-06-04)
+ 
+         response.success = True
+         return response

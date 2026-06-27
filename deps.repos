@@ -1,8 +1,13 @@
 repositories:
+  # crazyswarm2: use the llanesc 'crazysim' fork — it carries the UDP backend that
+  # CrazySim needs. Upstream IMRCLab/crazyswarm2@main has NO UDP backend and will not
+  # reach the SITL firmware. Pinned commit 94df3be. There is one local edit on top
+  # (server-side BVC peer-position broadcast) — see vendor/DEPENDENCIES.md to apply it.
   src/crazyswarm2:
     type: git
-    url: https://github.com/IMRCLab/crazyswarm2
-    version: main
+    url: https://github.com/llanesc/crazyswarm2
+    version: crazysim
+  # crazyflie-simulation: upstream as-is (a fork swap here was not confirmed; verify if sim breaks).
   src/crazyflie-simulation:
     type: git
     url: https://github.com/bitcraze/crazyflie-simulation

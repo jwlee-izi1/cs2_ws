@@ -107,14 +107,20 @@ cs2_ws/
 git clone git@github.com:ramank3/cs2_ws.git
 cd cs2_ws
 
-# External dependencies
+# External dependencies fetched by vcstool (crazyswarm2 = llanesc fork, crazyflie-simulation)
 vcs import < deps.repos
 cd src/crazyswarm2 && git submodule update --init --recursive && cd ../..
+
+# IMPORTANT: the crazyflie-firmware and cflib forks are NOT fetched by vcs, and the
+# crazyswarm2 fork has a local edit. Clone all three at their pinned commits and apply
+# the patches per  vendor/DEPENDENCIES.md  before continuing. That recipe also copies
+# Dockerfile.cf2-sitl into crazyflie-firmware/ (it lives in vendor/ because it is
+# gitignored inside the fork — a fresh clone will NOT contain it).
 
 # ROS deps
 rosdep install --from-paths src --ignore-src -r -y
 
-# Build cf2 SITL Docker image (one-time)
+# Build cf2 SITL Docker image (one-time) — needs Dockerfile.cf2-sitl copied in per vendor/DEPENDENCIES.md
 docker build --network=host -f crazyflie-firmware/Dockerfile.cf2-sitl -t cf2-sitl:22.04 crazyflie-firmware/
 
 # Build the workspace
