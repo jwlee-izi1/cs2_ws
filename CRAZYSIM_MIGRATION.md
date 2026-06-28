@@ -705,9 +705,15 @@ Every run terminal needs both the ROS underlay and this workspace's overlay. Ins
 typing two `source` lines per shell, source the bundled `~/cs2_ws/env.sh`:
 
 ```bash
-source ~/cs2_ws/env.sh        # = source /opt/ros/jazzy/setup.bash + source install/setup.bash
+source ~/cs2_ws/env.sh        # = ROS underlay + workspace overlay, and exports $CS2_WS
 ros2 pkg list | grep crazyflie   # sanity: crazyflie / crazyflie_interfaces / crazyflie_sim …
 ```
+
+`env.sh` is **shell-aware**: under bash it sources `setup.bash`, under zsh `setup.zsh`. This
+box's login shell is zsh (oh-my-zsh), and sourcing ROS's `setup.bash` *into* zsh fails —
+`${BASH_SOURCE[0]}` is empty in zsh, so ROS mis-locates its prefix to your CWD and dies with
+`no such file or directory: …/cs2_ws/setup.sh`. Just `source env.sh` from your normal
+terminal (bash or zsh); no need to drop to a bash subshell.
 
 ⚠️ **Do NOT add this to `~/.bashrc`** (or any global auto-source). Auto-sourcing ROS in
 every shell collides with the conda env we install later, and global env edits have bitten
@@ -719,12 +725,13 @@ wrapper only at sim-run time.
 
 ## How to run
 
-Four flows. Paths below use `$CS2_WS` — set it once per shell to wherever you cloned the
-workspace (a variable expands anywhere on the line, unlike `~`; see the note under the
-single-drone flow):
+Four flows. Paths below use `$CS2_WS` (a variable expands anywhere on the line, unlike `~`;
+see the note under the single-drone flow). **`source env.sh` already exports `$CS2_WS`** for
+you, so after sourcing you can use it directly. Only if you haven't sourced yet, set it
+manually (e.g. to bootstrap the first `source $CS2_WS/env.sh`):
 
 ```bash
-export CS2_WS=$HOME/cs2_ws   # set to wherever you cloned cs2_ws
+export CS2_WS=$HOME/cs2_ws   # this box: $HOME/UT/cs2_ws — or just `source env.sh` from the dir
 ```
 
 ### Thermal mapping demo (one-command, recommended for the multi-drone path)
