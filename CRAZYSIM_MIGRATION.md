@@ -525,6 +525,7 @@ Each row links to a per-project doc owned by that project. See §0 for the doc p
 | **Payload coupling** | [docs/payload.md](docs/payload.md) | plumbing ✅, stable hover ⏳ | `cf_payload_world` |
 | **Multinash bridge** | (no doc yet — package in `src/multinash_cs2_bridge`) | in progress | `multinash_cs2_bridge` |
 | **RL policy** | (placeholder — `src/rl_demo`) | not started; will replace lawnmower in `cf_coverage_planner` | `rl_demo` |
+| **Sim validation log** | [docs/sim_validation_log.md](docs/sim_validation_log.md) | baseline sim low-level-tracking checks (Test 1 ✅ 2026-06-27) | — (cross-cutting; CrazySim + crazyswarm2 stack) |
 
 **Hardware bringup status:** federated coverage + thermal mapping HW bringup is
 **complete** (2026-05-25 — fed_dcsa Stage 4 with figure-8 + thermal + BVC + dynamic
@@ -690,6 +691,13 @@ If you ever set this up on a fresh box, here's the recipe:
    Expect `Summary: 17 packages finished`. For day-to-day sourcing use
    [`env.sh`](#env-sourcing-runtime) instead of the two `source` lines.
 
+   > **Gotcha — empty `baseline_optimizers` executables.** If `ros2 run baseline_optimizers
+   > constant_leash_node` later reports `No executable found` (its
+   > `install/lib/baseline_optimizers/` is empty), that package's console-scripts didn't get
+   > installed — rebuild just it: `colcon build --packages-select baseline_optimizers`. For
+   > standalone planner tests you can skip it entirely and publish the leash directly:
+   > `ros2 topic pub /coverage/leash coverage_optimizer_interfaces/msg/Leash "{drone_names: ['cf1'], radii: [1.0], gate_state: 1}"`.
+
 <a id="env-sourcing-runtime"></a>
 ### Sourcing the environment to run (`env.sh`)
 
@@ -711,15 +719,21 @@ wrapper only at sim-run time.
 
 ## How to run
 
-Four flows.
+Four flows. Paths below use `$CS2_WS` — set it once per shell to wherever you cloned the
+workspace (a variable expands anywhere on the line, unlike `~`; see the note under the
+single-drone flow):
+
+```bash
+export CS2_WS=$HOME/cs2_ws   # set to wherever you cloned cs2_ws
+```
 
 ### Thermal mapping demo (one-command, recommended for the multi-drone path)
 
 ```bash
-~/cs2_ws/scripts/thermal_demo.sh up        # full bringup: sim + server + takeoff + thermal mapping + RViz
-~/cs2_ws/scripts/thermal_demo.sh map       # subscribe /thermal_map, print finite cells + temp range
-~/cs2_ws/scripts/thermal_demo.sh status    # what's running
-~/cs2_ws/scripts/thermal_demo.sh down      # tear everything down
+$CS2_WS/scripts/thermal_demo.sh up        # full bringup: sim + server + takeoff + thermal mapping + RViz
+$CS2_WS/scripts/thermal_demo.sh map       # subscribe /thermal_map, print finite cells + temp range
+$CS2_WS/scripts/thermal_demo.sh status    # what's running
+$CS2_WS/scripts/thermal_demo.sh down      # tear everything down
 
 # flags:  --no-takeoff   --no-rviz   --no-thermal   --num-drones N
 ```
@@ -730,14 +744,16 @@ The script does explicit pre-flight (docker, cflib, ROS env, image, YAML) then r
 
 ```bash
 # Terminal 1 — Gazebo + cf2-0 docker container
-cd ~/cs2_ws/crazyflie-firmware
+source $CS2_WS/env.sh          # gz is a ROS vendor pkg → only on PATH after sourcing
+cd $CS2_WS/crazyflie-firmware
 bash tools/crazyflie-simulation/simulator_files/gazebo/launch/sitl_singleagent.sh \
     -m crazyflie -x 0 -y 0
 
 # Terminal 2 — crazyswarm2 server (cflib backend)
+source $CS2_WS/env.sh
 ros2 launch crazyflie launch.py \
     backend:=cflib \
-    crazyflies_yaml_file:=$HOME/cs2_ws/config/crazyflies_sitl.yaml \
+    crazyflies_yaml_file:=$CS2_WS/config/crazyflies_sitl.yaml \
     mocap:=False \
     gui:=false
 
@@ -755,24 +771,32 @@ workspace, so the whole launch aborts with `package 'motion_capture_tracking' no
 `mocap:=False` skips the node. Only bites the `backend:=cflib` + sim combo (the `sim`
 backend already short-circuits the condition; HW builds the package).
 
-**Why `$HOME` not `~` in `crazyflies_yaml_file`:** the `~` sits mid-word after `:=`, where
-bash does *not* do tilde expansion, so it's passed literally and launch dies with
-`No such file or directory: '~/cs2_ws/config/...'`. Use `$HOME` (or an absolute path).
-Same applies to the multi-drone command below. (The `cd ~/cs2_ws/...` lines are fine — `~`
-there is at the start of the word, so it expands normally.)
+**Why `$CS2_WS` not `~` in `crazyflies_yaml_file`:** a `~` mid-word after `:=` is *not*
+tilde-expanded by bash — it's passed literally and launch dies with
+`No such file or directory: '~/cs2_ws/config/...'`. A variable like `$CS2_WS` expands
+anywhere on the line, so it sidesteps the trap (an absolute path works too). Same applies
+to the multi-drone command below.
+
+**Heads-up — planner-driven flights (coverage / figure-8):** the policy planners
+(`coverage_planner_node`, `quadrant_figure8_node`, …) only begin publishing
+`/cfN/policy_target` once BOTH `/coverage/leash` AND `/cfN/odom` are live. No leash ⇒ the
+drone just hovers at its takeoff point — no error, no warning (a quiet failure). Supply a
+leash first (an optimizer, or `ros2 topic pub /coverage/leash …`).
 
 ### Multi-drone, free-flying (4 drones in a square)
 
 ```bash
 # Terminal 1 — Gazebo + 4 cf2 containers
-cd ~/cs2_ws/crazyflie-firmware
+source $CS2_WS/env.sh          # gz is a ROS vendor pkg → only on PATH after sourcing
+cd $CS2_WS/crazyflie-firmware
 bash tools/crazyflie-simulation/simulator_files/gazebo/launch/sitl_multiagent_square.sh \
     -n 4 -m crazyflie
 
 # Terminal 2 — crazyswarm2 server
+source $CS2_WS/env.sh
 ros2 launch crazyflie launch.py \
     backend:=cflib \
-    crazyflies_yaml_file:=$HOME/cs2_ws/config/crazyflies_sitl_multi.yaml \
+    crazyflies_yaml_file:=$CS2_WS/config/crazyflies_sitl_multi.yaml \
     gui:=false
 
 # Terminal 3

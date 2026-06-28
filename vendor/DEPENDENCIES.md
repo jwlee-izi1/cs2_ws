@@ -126,8 +126,28 @@ other nodes running). The 3D flight view comes from the Gazebo GUI, not `gui.py`
 pip install --user --break-system-packages rowan
 ```
 
-Same `--break-system-packages` / `~/.local` rationale as transforms3d above. Skip it
-entirely by launching with `gui:=false`.
+Same `--break-system-packages` / `~/.local` rationale as transforms3d above. **rowan alone
+isn't enough** — `gui:=True` also needs `nicegui` (next section), so installing only rowan
+just moves the failure down one import. Skip both by launching with `gui:=false`.
+
+## Runtime Python dependency — nicegui (also only for `gui:=True`)
+
+**Symptom:** with `gui:=True`, once `rowan` is satisfied, `gui.py` dies one import later
+with `ModuleNotFoundError: No module named 'nicegui'`. So `gui:=True` needs **both** `rowan`
+and `nicegui`.
+
+**Cause:** crazyswarm2's `gui.py` 2D viewer is a NiceGUI web app. Same **non-blocking**
+behaviour as rowan — only `gui.py` dies; `crazyflie_server`, teleop, odom, and the Gazebo
+GUI (the actual 3D flight view) keep running.
+
+**Fix (only if you actually want the 2D viewer):**
+
+```bash
+pip install --user --break-system-packages nicegui
+```
+
+Same `--break-system-packages` / `~/.local` rationale as transforms3d. Skip it (and rowan)
+by launching with `gui:=false`.
 
 ## Pinned versions
 
