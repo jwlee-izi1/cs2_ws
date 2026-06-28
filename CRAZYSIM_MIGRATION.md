@@ -804,6 +804,46 @@ ros2 service call /all/takeoff crazyflie_interfaces/srv/Takeoff \
     "{group_mask: 0, height: 1.0, duration: {sec: 3, nanosec: 0}}"
 ```
 
+### 2-drone BVC head-on / position-swap (Test 2 — BVC verification)
+
+Two drones spawn facing each other on the x-axis (cf1 (−1,0), cf2 (+1,0)) and are
+commanded to swap → head-on course. With `peer_broadcast_hz>0` the onboard BVC must bend
+the paths so they never get within the 0.6 m cell wall. Headless by default (no GPU). See
+[docs/sim_validation_log.md](docs/sim_validation_log.md) Test 2 for the result.
+
+```bash
+# Terminal 1 — Gazebo SERVER ONLY + 2 cf2 containers, drones at (−1,0)/(+1,0)
+source $CS2_WS/env.sh
+bash $CS2_WS/scripts/sitl_2drone_headon.sh            # Ctrl-C (or --down) tears it all down
+
+# Terminal 2 — crazyswarm2 server (BVC on: peer_broadcast_hz:30)
+source $CS2_WS/env.sh
+ros2 launch crazyflie launch.py \
+    backend:=cflib \
+    crazyflies_yaml_file:=$CS2_WS/config/crazyflies_sitl_2drone.yaml \
+    mocap:=False gui:=false
+# expect log: "BVC peer-position broadcast ON at 30 Hz (peer ids {cf1:1, cf2:2})"
+
+# Terminal 3 — drive the swap + log min-separation / sidestep to CSV
+source $CS2_WS/env.sh
+python3 $CS2_WS/scripts/bvc_headon_test.py --label bvc_on --out /tmp/bvc/bvc_on.csv
+```
+
+**BVC-off control** (proves the avoidance is BVC's, not geometry): same as above but
+Terminal 2 uses `crazyflies_sitl_2drone_nobvc.yaml` (`peer_broadcast_hz:0`). **Restart the
+whole stack** between runs — after a `land`, re-`takeoff` is a no-op until the firmware is
+re-armed by a fresh spawn (Terminal-1 relaunch). Expected: min sep ~0.10 m (near
+pass-through) vs ~0.61 m with BVC on.
+
+**To watch it with the GUI:** pass `--gui` to the Terminal-1 launcher
+(`bash $CS2_WS/scripts/sitl_2drone_headon.sh --gui`). It opens `gz sim -g` in that same
+shell so the models render (the client inherits the GZ resource/plugin paths). On this
+Optimus box the GUI renders on the **default Intel iGPU** — no `gz-gpu` / RTX offload, no
+global GPU env — which is plenty for 2 drones and keeps heat/fan low. Closing the window
+(or Ctrl-C) tears the whole stack down. Terminals 2 and 3 are unchanged; you'll watch cf1
+veer −y and cf2 veer +y as they swap. To re-watch, restart Terminal 1 (a landed drone
+won't re-`takeoff` until re-armed by a fresh spawn).
+
 ### Payload world (4 drones rod-coupled to a payload box)
 
 ```bash

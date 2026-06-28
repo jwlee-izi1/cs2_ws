@@ -1,0 +1,55 @@
+# 2-drone SITL config — BVC-OFF CONTROL variant (peer broadcast disabled -> nOthers=0 -> no-op).
+# cf1 starts at (-1, 0), cf2 at (+1, 0); they are commanded to swap, putting them on a
+# direct collision course along the x-axis (same y=0, same z). With peer_broadcast_hz>0
+# the onboard Buffered Voronoi Cell (colAv) gets neighbor positions and must bend the
+# setpoints to avoid contact. UDP cflib port = 19850 + cf_id (cf_id 0..1).
+#
+# Control variant for the test: crazyflies_sitl_2drone_nobvc.yaml (peer_broadcast_hz: 0).
+fileversion: 3
+
+robots:
+  cf1:
+    enabled: true
+    uri: udp://127.0.0.1:19850
+    initial_position: [-1.0, 0.0, 0.0]
+    type: cf21
+  cf2:
+    enabled: true
+    uri: udp://127.0.0.1:19851
+    initial_position: [1.0, 0.0, 0.0]
+    type: cf21
+
+robot_types:
+  cf21:
+    motion_capture:
+      enabled: false
+      tracking: "off"
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8
+      voltage_critical: 3.7
+
+all:
+  # BVC peer-position broadcast: the server tells each drone its neighbors' positions at
+  # this rate (Hz) via packed EXT_POSITION_PACKED CRTP, so the onboard collision avoidance
+  # (colAv below) has neighbors to avoid. 0 = off (no-op BVC, like Test 1). 30 Hz << the
+  # 5 s firmware peer-staleness window, so peers never go stale.
+  peer_broadcast_hz: 0.0
+  firmware_params:
+    commander:
+      enHighLevel: 1
+    stabilizer:
+      estimator: 2
+      controller: 1
+    # Buffered Voronoi Cell onboard collision avoidance (James Preiss). Defaults:
+    # ellipsoidRadii 0.3/0.3/0.9 m, maxSpeed 0.5 m/s, horizon 1.0 s, sidestepThreshold
+    # 0.25 m. Horizontal cell geometry keeps center-to-center separation >= 2*0.3 = 0.6 m.
+    colAv:
+      enable: 1
+  firmware_logging:
+    enabled: true
+    default_topics:
+      odom:
+        frequency: 30
