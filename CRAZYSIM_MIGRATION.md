@@ -737,13 +737,29 @@ bash tools/crazyflie-simulation/simulator_files/gazebo/launch/sitl_singleagent.s
 # Terminal 2 — crazyswarm2 server (cflib backend)
 ros2 launch crazyflie launch.py \
     backend:=cflib \
-    crazyflies_yaml_file:=~/cs2_ws/config/crazyflies_sitl.yaml \
+    crazyflies_yaml_file:=$HOME/cs2_ws/config/crazyflies_sitl.yaml \
+    mocap:=False \
     gui:=false
 
 # Terminal 3 — fly
 ros2 service call /cf1/takeoff crazyflie_interfaces/srv/Takeoff \
     "{group_mask: 0, height: 1.0, duration: {sec: 3, nanosec: 0}}"
 ```
+
+**Why `mocap:=False`:** sim doesn't use motion capture (`crazyflies_sitl.yaml` has
+`tracking: off`), but the launch default is `mocap:=True`. With `backend:=cflib` the
+`motion_capture_tracking` node's condition (`backend != 'sim' and mocap == 'True'`,
+[crazyswarm2 `crazyflie/launch/launch.py`](src/crazyswarm2/crazyflie/launch/launch.py))
+evaluates true and launch tries to spawn it — but that package isn't built in this
+workspace, so the whole launch aborts with `package 'motion_capture_tracking' not found`.
+`mocap:=False` skips the node. Only bites the `backend:=cflib` + sim combo (the `sim`
+backend already short-circuits the condition; HW builds the package).
+
+**Why `$HOME` not `~` in `crazyflies_yaml_file`:** the `~` sits mid-word after `:=`, where
+bash does *not* do tilde expansion, so it's passed literally and launch dies with
+`No such file or directory: '~/cs2_ws/config/...'`. Use `$HOME` (or an absolute path).
+Same applies to the multi-drone command below. (The `cd ~/cs2_ws/...` lines are fine — `~`
+there is at the start of the word, so it expands normally.)
 
 ### Multi-drone, free-flying (4 drones in a square)
 
@@ -756,7 +772,7 @@ bash tools/crazyflie-simulation/simulator_files/gazebo/launch/sitl_multiagent_sq
 # Terminal 2 — crazyswarm2 server
 ros2 launch crazyflie launch.py \
     backend:=cflib \
-    crazyflies_yaml_file:=~/cs2_ws/config/crazyflies_sitl_multi.yaml \
+    crazyflies_yaml_file:=$HOME/cs2_ws/config/crazyflies_sitl_multi.yaml \
     gui:=false
 
 # Terminal 3
