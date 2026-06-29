@@ -93,9 +93,13 @@ done
 trap "cleanup" SIGINT SIGTERM EXIT
 
 if [ "$GUI" == "1" ]; then
-	echo "[sitl_2drone] up. cf1@(-1,0) cf2@(+1,0). Opening GUI client (gz sim -g, Intel iGPU)..."
+	# GZ_GUI_WRAP lets the GUI client be wrapped (e.g. `gz-gpu` for RTX PRIME offload on this
+	# Optimus box) WITHOUT a global GPU env. Default empty -> plain `gz sim -g` on the Intel
+	# iGPU, unchanged from the BVC test. For a clean recording run:  GZ_GUI_WRAP=gz-gpu --gui.
+	_REND="Intel iGPU"; [ -n "${GZ_GUI_WRAP:-}" ] && _REND="via '${GZ_GUI_WRAP}' (RTX offload)"
+	echo "[sitl_2drone] up. cf1@(-1,0) cf2@(+1,0). Opening GUI client (gz sim -g, ${_REND})..."
 	echo "[sitl_2drone] close the window (or Ctrl-C) to tear everything down."
-	gz sim -g
+	${GZ_GUI_WRAP:-} gz sim -g
 else
 	echo "[sitl_2drone] up. cf1@(-1,0) cf2@(+1,0), headless. Ctrl-C to tear down."
 	echo "[sitl_2drone] (server PID(ruby) running; this script now waits.)"
