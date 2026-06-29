@@ -526,6 +526,7 @@ Each row links to a per-project doc owned by that project. See §0 for the doc p
 | **Multinash bridge** | (no doc yet — package in `src/multinash_cs2_bridge`) | in progress | `multinash_cs2_bridge` |
 | **RL policy** | (placeholder — `src/rl_demo`) | not started; will replace lawnmower in `cf_coverage_planner` | `rl_demo` |
 | **Sim validation log** | [docs/sim_validation_log.md](docs/sim_validation_log.md) | baseline sim low-level-tracking checks (Test 1 ✅ 2026-06-27) | — (cross-cutting; CrazySim + crazyswarm2 stack) |
+| **HW test runbook** (CBF head-on) | [docs/hw_test_runbook.md](docs/hw_test_runbook.md) | step-by-step procedure for taking the sim-validated CBF avoidance to real Crazyflies (Vicon) — ⏳ not yet flown | — (cross-cutting; uses `scripts/cbf_headon_test.py` + `crazyflies_hw.yaml`) |
 
 **Hardware bringup status:** federated coverage + thermal mapping HW bringup is
 **complete** (2026-05-25 — fed_dcsa Stage 4 with figure-8 + thermal + BVC + dynamic
