@@ -85,11 +85,49 @@ These are the "things to change" — **listed, not changed** (no code edits in t
 | 2.8 | **Battery** | `voltage_warning:3.8 / voltage_critical:3.7` ([crazyflies_hw.yaml:42](../config/crazyflies_hw.yaml#L42)); supervisor refuses to arm < 3.7 V ([CRAZYSIM_MIGRATION.md:475](../CRAZYSIM_MIGRATION.md)). | Both packs fresh (> ~3.9 V resting). A weak pack = more PWM for lift ([CRAZYSIM_MIGRATION.md:506-508](../CRAZYSIM_MIGRATION.md)). |
 | 2.9 | **Flight space** | Clear runway between the two head-on positions long enough for the swap + lateral sidestep (sim sidestep reached \|y\|≈0.6 m, [sim_validation_log.md Test 5](sim_validation_log.md); allow ≥1 m clearance each side). | No obstacles/people in the swap corridor or the sidestep margins. |
 | 2.10 | **Kill switch ready** | `/cfN/emergency` + `/all/emergency` (Empty srv → firmware `send_emergency_stop()`) at [crazyflie_server.py:311,388,938-943](../src/crazyswarm2/crazyflie/scripts/crazyflie_server.py#L938). **This cuts motors instantly (drone drops).** | A terminal pre-typed with `ros2 service call /all/emergency std_srvs/srv/Empty "{}"` ready to hit Enter (see §5). |
+| 2.11 | **★ radio↔Vicon mapping verified** | The single most dangerous failure for ≥2 drones. See **§2A** — run the move-test **every** multi-drone flight. | Moving the drone you call `cfN` moves **`/cfN/odom`** and no other. If the *wrong* odom moves → **STOP, do not arm** (mapping swapped). |
 
 > **Kill-switch caveat.** `/all/emergency` is a **motor cut → free fall**, not a controlled land.
 > For a soft stop use `/all/land`. Use emergency only when a crash is otherwise imminent.
 > ⚠️ Whether a physical/joystick e-stop is also wired is **NO REPO BASIS** — the software service
 > above is the kill switch this stack provides.
+
+---
+
+## 2A. ★ MANDATORY pre-flight gate — radio↔Vicon mapping (run EVERY multi-drone flight)
+
+**This is not a one-time setup check — re-run it before every multi-drone arm.** Drones get
+re-placed, re-imaged, or swapped between sessions; the mapping can be correct one flight and wrong
+the next. Verified live 2026-06-30 (it caught a real swap that would have crashed both drones).
+
+**The trap.** A drone's Vicon **rigid-body label is derived purely from `initial_position`**, not
+from its radio identity. The launch file builds one rigid body per enabled robot, seeded at that
+robot's `initial_position` ([launch.py:48-57](../src/crazyswarm2/crazyflie/launch/launch.py#L48)),
+and `librigidbodytracker` then assigns whichever **marker is nearest each seed** to that label. So
+if you physically place the drone whose radio is `…E2` where the `cf4` seed sits, Vicon will label
+it **cf4** — while the server still sends `/cf4`'s extpos to it and the driver reads `/cf4/odom`
+for it. The radio (`…E2`) and the Vicon label (`cf4`) now point at **different physical drones**.
+
+**Why it crashes silently.** The server feeds extpos(Vicon-`cfN`) to radio-`cfN`. If those are
+different drones, the EKF of radio-`cfN` is told it is where the *other* drone is; `/cfN/odom`
+then reads a plausible, stable, **wrong** position. Nothing looks off on the ground — until takeoff,
+when the drone flies to "correct" a position error that is really a label swap → immediate runaway.
+
+**The test (definitive, ~30 s).** With the stack up and both drones tracked & stable on the ground:
+1. Stream both odoms (e.g. a small subscriber, or `ros2 topic echo /cfN/odom`).
+2. By hand, gently slide **one** drone you can identify (sticker/URI) ~30 cm and hold it.
+3. **GO:** only **that drone's** `/cfN/odom` changes; the other stays put. Mapping is correct.
+4. **NO-GO:** a *different* `cfN`'s odom moves → **STOP, do not arm.** The labels are swapped vs
+   radio identity. Fix by setting each robot's `initial_position` to the **actual** physical
+   position of *its radio drone* (so `cf2`'s seed sits where the `…E2` drone really is), relaunch,
+   and re-run this test until it passes.
+
+**If you can't tell which physical drone is which radio ID:** scan to confirm which URIs are live
+(`cflib.crtp.scan_interfaces(addr)` per address), then bind radio→physical by actuating one drone
+over its URI. Note: **motors are arming-gated** (firmware 2024+), so a `motorPowerSet` blip does
+nothing until you `send_arming_request(True)` first; and these frames have **no LED-ring / buzzer
+deck** (`deck.bcLedRing=0`, `deck.bcBuzzer=0`), so an armed single-motor blip is the available
+physical identifier. Easiest is still the sticker + move-test above.
 
 ---
 
@@ -337,12 +375,64 @@ moving-obstacle stage.
 
 ---
 
+## 8. 2-drone simultaneous hover — infra validation (2026-06-30, real HW) ✅ PASSED
+
+The infra step **between** single-drone (§4, done 2026-06-29) and any avoidance flight. Goal is
+**not** avoidance — only to confirm two drones can be told apart and held aloft at once before
+trusting the CBF. Live drones this session: **cf2 (`…E2`) + cf4 (`…E4`)**; `cf1`/`cf3` did not
+respond to a radio scan.
+
+**Config:** dedicated [config/crazyflies_hw_2drone.yaml](../config/crazyflies_hw_2drone.yaml) —
+only cf2+cf4 enabled, `initial_position` probed from live `/poses`, **`colAv.enable:0` and
+`peer_broadcast_hz:0`** (hover-only, no avoidance). The shared 4-drone `crazyflies_hw.yaml`
+(Raman's fed_dcsa demo) is **left untouched**.
+
+**Procedure:**
+1. Launch the stack with the 2-drone yaml, `mocap:=True backend:=cflib` (as §3 step 2).
+2. Confirm both `fully connected`, both `/cfN/odom` at 20 Hz with **no dropouts** (`ros2 topic hz`
+   — not `echo --once`, which races and shows false gaps), and each odom matching its `/poses` body.
+3. **Run the §2A mapping gate (move-test).** ← this is where the swap was caught; do not skip.
+4. Place the two drones **≥1.5 m apart** (removes the close-range ghost-marker variable for hover).
+5. Arm both → `takeoff 0.5 m` **one drone first**, confirm stable hover ~5 s → takeoff the second →
+   both hover 0.5 m ~10 s → `/all/land` → disarm both. Drive with odom monitored live; `/all/land`
+   on any divergence, `/all/emergency` (human) as backstop.
+
+**Result (PASSED):** sequential takeoff clean; both held 0.5 m (z 0.50 ±0.02); **no mutual
+interference** (second takeoff did not perturb the first, ~1.58 m apart); **0 radio dropouts**
+with both flying on the single dongle (odom age <50 ms throughout); smooth simultaneous land.
+
+### 8.1 Gotchas observed (real HW)
+- **★ radio↔Vicon mapping was SWAPPED** — the headline finding. Physical placement was opposite the
+  old quadrant seeds, so Vicon labeled each drone as the *other* one. Caught by §2A, fixed by
+  swapping the `initial_position` seeds to each radio drone's real position. **See §2A — this is now
+  a mandatory every-flight gate.**
+- **Single-marker tracking is occlusion-fragile.** Hand-holding a drone for the move-test occludes
+  its one top marker → `librigidbodytracker` drops the body → extpos stops → the onboard EKF
+  **diverges** (`/cfN/odom` ran to tens of metres) and does **not** self-recover; a stack restart
+  re-initialises the body and resets the estimate. Irrelevant in flight (marker stays exposed), but
+  expect it whenever you manually handle a flying-config drone, and **restart rather than trusting a
+  recovered odom.**
+- **A bad connection on one drone can starve the other (shared dongle).** The first 2-drone launch
+  hit a transient `cf2` link error during log-config setup (`RadioDriver: Could not send packet` →
+  `Could not add log config` → a thread crash); that poisoned the shared radio so **cf4's extpos was
+  starved and its EKF diverged too**, even though cf4 itself was healthy. **A clean relaunch fixed
+  it** — each drone is fine alone, and the retry connected both cleanly. If one drone misbehaves at
+  connect, **relaunch the whole stack** rather than flying the "good" one.
+
+---
+
 ## Open items (⚠️ NO REPO BASIS — resolve on HW)
+- **Drone-ID reconciliation for the avoidance stage:** the CBF head-on driver commands **cf1+cf2**
+  ([cbf_headon_test.py:257-258](../scripts/cbf_headon_test.py#L257)), but the live drones are
+  **cf2+cf4** (cf1/cf3 absent on 2026-06-30). Before the avoidance flight: either power on cf1, or
+  retarget the driver/yaml to cf2+cf4. Re-run the §2A gate after whichever choice.
 - ~~Vicon real rate, position σ, end-to-end `/cf2/odom` delay — measure in §4 (Stage 0).~~
   **✅ MEASURED 2026-06-29 (cf2, real HW) — see §4.0.** Rate 20 Hz (odom) / 397 Hz (`/poses`);
   horizontal σ 0.8–0.9 cm; delay ≲ 67 ms (1-hop, resolution-limited). Not assumptions — actual
   measurements. R = 0.7 m confirmed amply conservative.
-- A dedicated 2-drone HW yaml (§2.4) — does not exist; create or power off cf3/cf4.
+- ~~A dedicated 2-drone HW yaml (§2.4) — does not exist; create or power off cf3/cf4.~~
+  **✅ DONE 2026-06-30 — [config/crazyflies_hw_2drone.yaml](../config/crazyflies_hw_2drone.yaml)**
+  (cf2+cf4, hover-only, colAv/peer off). See §8.
 - Head-on physical layout + matching `initial_position` (§2.3) — current yaml is a quadrant layout.
 - Best peer-feed flags (`--ideal-peer` vs `--peer-hz 20`) on HW (§6) — confirm empirically.
 - Whether `peer_broadcast_hz` / firmware BVC should be off for a clean Python-CBF-only comparison (§3 step 2).

@@ -1,0 +1,53 @@
+# 2-drone hover infra-validation config (NOT the shared 4-drone fed_dcsa yaml).
+# Purpose: verify (1) Vicon discriminates the two rigid bodies correctly and
+# (2) both drones hold a stable simultaneous hover (radio bandwidth + prop-wash).
+# NO avoidance at this stage -> firmware BVC / peer broadcast OFF (hover-only).
+#
+# Live drones probed by radio scan 2026-06-30: cf2 (E2) + cf4 (E4) on ch100/2M.
+# cf1/cf3 not present. Do NOT overwrite config/crazyflies_hw.yaml (Raman's demo).
+#
+# initial_position: SEEDED from 2026-06-04 quadrant probe; RE-PROBED from live
+# /poses 2026-06-30 (drones repositioned ~1.5-2m apart for hover). librigidbody-
+# tracker needs the drone within ~50cm of these at startup to assign IDs.
+fileversion: 3
+
+robots:
+  # SWAP FIX 2026-06-30: physical placement was opposite the old quadrant seeds.
+  # Confirmed by move-test + sticker: LEFT drone = cf2/radioE2 is at SOUTH(-Y),
+  # RIGHT drone = cf4/radioE4 is at NORTH(+Y). Seeds MUST match each radio drone's
+  # real position or librigidbodytracker mislabels (Vicon label is position-derived,
+  # not radio-derived) -> /cfN/odom maps to the wrong physical drone -> crash.
+  cf2:
+    enabled: true
+    uri: radio://0/100/2M/E7E7E7E7E2
+    initial_position: [0.031, -0.758, 0.047]  # E2 = SOUTH, probed from /poses 2026-06-30
+    type: cf21
+  cf4:
+    enabled: true
+    uri: radio://0/100/2M/E7E7E7E7E4
+    initial_position: [0.035, 0.726, 0.049]  # E4 = NORTH, probed from /poses 2026-06-30
+    type: cf21
+
+robot_types:
+  cf21:
+    motion_capture:
+      tracking: "librigidbodytracker"
+      marker:   default_single_marker
+      dynamics: default
+    big_quad: false
+    battery: { voltage_warning: 3.8, voltage_critical: 3.7 }
+
+all:
+  # Hover-only infra validation: no peer feed, no firmware collision avoidance.
+  peer_broadcast_hz: 0.0
+  firmware_params:
+    commander:  { enHighLevel: 1 }
+    stabilizer: { estimator: 2, controller: 1 }   # Kalman(2) + PID(1), proven w/ single-marker mocap
+    locSrv:     { extPosStdDev: 0.01 }            # mocap trust (matches 4-drone baseline)
+    colAv:      { enable: 0 }                     # OFF: hover-only, no avoidance this stage
+  firmware_logging:
+    # Required for /cfN/odom (pose for the Vicon-discrimination check + hover monitor).
+    enabled: true
+    default_topics:
+      odom:
+        frequency: 20
