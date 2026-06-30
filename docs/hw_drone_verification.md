@@ -519,6 +519,21 @@ institutional fleet state lives here.
   `/poses` within mm. **Verified.**
 - 2026-05-21: envelope Pass 1 @ 1.0 m/s clean (cross pattern 1.9 m
   radius, hover + thermal mapping live). **Verified to 1.0 m/s.**
+- 2026-06-29: takeoff-hover-land clean (yaw≈0 + ch100, single-drone
+  test on a freshly-reprovisioned box). z=0.5 m takeoff; `/poses` and
+  `/cf2/odom` both peaked at 0.578 m and tracked together throughout;
+  held (x,y) within a few cm of init (0.02, −0.282); monotonic descent;
+  0 mocap drops, 0 link drops. **Verified.**
+  - *Box reprovision note:* this run started from a bare box — udev
+    rule `99-bitcraze.rules`, `pyvicon_datastream`, and the apt pkg
+    `ros-jazzy-motion-capture-tracking` (mocap **node**, distinct from
+    the apt-present `-interfaces`) were all missing and had to be
+    reinstalled before bringup. Wired `enp12s0`→Vicon switch had to be
+    re-cabled (box was WiFi-only). Worth a preflight check after any
+    reimage.
+  - *vicon_monitor noise:* monitor logged 476 raw-marker anomalies
+    (count≠1) but flight_logger showed 0 `/poses` drops — the §5.2
+    "trust flight_logger over monitor" case again.
 
 ### cf3
 

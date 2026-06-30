@@ -176,6 +176,33 @@ run, repeat from Step 4.
 [hw_localization_path.md:157-165](hw_localization_path.md) lists three quantities the repo does **not**
 pin down and says to measure them on HW. How to get each — **using only existing topics**:
 
+### 4.0 Measured results (2026-06-29, cf2, real HW) — ACTUAL MEASUREMENTS, not assumptions
+
+The three unknowns below were **measured on real hardware** (cf2 single drone, Vicon volume,
+PID controller / Kalman estimator, `extPosStdDev:0.01`). **Method:** a recorder node logged
+`/poses` + `/cf2/odom` on a **single receive clock** (deliberately *not* header stamps — odom is
+re-stamped, see §4.3); a **30 s static-hover bag** + a **36 s motion bag** (±0.3 m `go_to` steps at
+0.15 m/s); delay via offline cross-correlation (position **and** velocity).
+
+| Unknown (§) | **Measured** | Notes |
+|---|---|---|
+| Effective rate (§4.1) | `/poses` **397 Hz** (p95 dt 2.7 ms, no dropouts); `/cf2/odom` **20.0 Hz** (p95 dt 52 ms) | odom rate = what the CBF actually consumes. Confirms the 20 Hz config; `/poses` source rate is ~400 Hz (the 100 Hz QoS hint was *not* the source rate). |
+| Horizontal position σ (§4.2) | **0.8–0.9 cm/axis** on `/cf2/odom` (x 8.1 mm, y 8.7 mm); z σ ~2.9 cm | Airborne hover, so this is station-keeping + sensor noise = an **upper bound** on pure sensor σ. **Below Test 5's 1.5 cm "negligible" threshold → noise is not the limiter**, as predicted. |
+| End-to-end delay Vicon→`/cf2/odom` (§4.3) | **≲ 67 ms (1-hop)** — *not* finalized to a point value | Resolution-limited: the 0.15 m/s motion has a floor σ/slew = 10 mm / 150 mm·s⁻¹ ≈ **67 ms**; below that a real delay is invisible. Point estimate landed at 0–5 ms (pos & vel xcorr, corr 0.998–1.000). Physically bounded by the 20 Hz odom sampling (~25–50 ms) + minor pipeline. **Confirms the §4.3 scope note: the 1-hop `/cf2/odom` delay is ≪ Test 5's assumed 2-hop 100 ms.** |
+
+**odom-follows-Vicon quality (motion bag):** horizontal tracking is **mm-accurate** — residual
+RMS **x 2.2 mm, y 1.6 mm** (max ≤ 5.5 mm) after delay alignment, **no horizontal jumps / drops /
+ghost-marker artifacts** (the axis the head-on CBF runs on). z showed ~**0.8 %** single-sample
+~25 cm spikes (instant recovery, mid-hover, in pairs — likely the benign `Error no LogEntry id=1`
+corrupted-log packet); **z-only, irrelevant to horizontal head-on avoidance.** 0 radio link drops.
+
+**R_design impact (why the sharp-step re-fly was skipped — yak-shaving):** with a conservative
+delay of 50 ms, `delay·v_rel` = 7.5 mm (Stage 1, v_rel 0.15) to 40 mm (full head-on, v_rel 0.8);
+even at the **67 ms upper bound · v_rel 0.8 = 54 mm**. All **≪ R = 0.7 m** — so a precise delay
+would not change the R margin. The measured numbers confirm R = 0.7 m is amply conservative and
+that **neither noise nor delay is binding** for the first flights. (Pinning delay crisply would
+need sharper steps, ~0.4–0.5 m/s, dropping the floor to ~20 ms — deferred as unnecessary.)
+
 ### 4.1 Vicon actual output rate
 - The repo only has a **QoS deadline hint of 100 Hz** ([motion_capture.yaml:12-13](../config/motion_capture.yaml#L12)), which is *not* the source rate ([hw_localization_path.md:107](hw_localization_path.md)).
 - **Measure:** `ros2 topic hz /poses` (the raw mocap `NamedPoseArray`, [hw_localization_path.md:19,47](hw_localization_path.md)).
@@ -311,7 +338,10 @@ moving-obstacle stage.
 ---
 
 ## Open items (⚠️ NO REPO BASIS — resolve on HW)
-- Vicon real rate, position σ, end-to-end `/cf2/odom` delay — measure in §4 (Stage 0).
+- ~~Vicon real rate, position σ, end-to-end `/cf2/odom` delay — measure in §4 (Stage 0).~~
+  **✅ MEASURED 2026-06-29 (cf2, real HW) — see §4.0.** Rate 20 Hz (odom) / 397 Hz (`/poses`);
+  horizontal σ 0.8–0.9 cm; delay ≲ 67 ms (1-hop, resolution-limited). Not assumptions — actual
+  measurements. R = 0.7 m confirmed amply conservative.
 - A dedicated 2-drone HW yaml (§2.4) — does not exist; create or power off cf3/cf4.
 - Head-on physical layout + matching `initial_position` (§2.3) — current yaml is a quadrant layout.
 - Best peer-feed flags (`--ideal-peer` vs `--peer-hz 20`) on HW (§6) — confirm empirically.
