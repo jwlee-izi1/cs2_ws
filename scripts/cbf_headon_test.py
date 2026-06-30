@@ -55,8 +55,8 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
-from crazyflie_interfaces.msg import Position
-from crazyflie_interfaces.srv import Takeoff, Land
+from crazyflie_interfaces.msg import Position, Status
+from crazyflie_interfaces.srv import Takeoff, Land, NotifySetpointsStop
 from builtin_interfaces.msg import Duration
 
 try:
@@ -64,6 +64,19 @@ try:
     _HAVE_QP = True
 except Exception:                       # no solver installed -> analytic fallback
     _HAVE_QP = False
+
+
+def _quat_to_rpy(x, y, z, w):
+    """Quaternion -> (roll, pitch, yaw) in rad (ZYX). For attitude/flip logging."""
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+    pitch = math.asin(sinp)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return (roll, pitch, yaw)
 
 
 def cbf_filter(p_ego, p_obs, v_des, v_obs, R, alpha):
@@ -236,9 +249,17 @@ class CBFHeadOn(Node):
         super().__init__('cbf_headon_test')
         self.args = args
         self.z = args.z
+        # Internal role keys stay 'cf1'=ego(avoider), 'cf2'=obstacle (so all the
+        # avoidance/bias/goal math below is unchanged). Only the ROS namespace each
+        # role talks to is remapped via --ego-id/--obs-id. Sim default cf1/cf2 =>
+        # byte-identical to Tests 3-5; HW uses --ego-id cf2 --obs-id cf4.
+        self.ego_id = args.ego_id        # physical drone for the ego role ('cf1')
+        self.obs_id = args.obs_id        # physical drone for the obstacle role ('cf2')
         self.pos = {'cf1': None, 'cf2': None}          # latest (x,y,z)
         self.start = {'cf1': None, 'cf2': None}        # recorded pre-takeoff
         self.goal = {'cf1': None, 'cf2': None}         # (x,y) targets
+        self.att = {'cf1': None, 'cf2': None}          # latest (roll,pitch,yaw) rad (from odom)
+        self.status = {'cf1': None, 'cf2': None}       # latest (vbat_V, tumbled int) from /status
         self.v_obs = np.zeros(2)                       # EMA-filtered cf2 velocity estimate
         # peer-feed degradation layer (see PeerFeed). --ideal-peer => transparent (50 Hz,
         # 0 delay, 0 noise) which reproduces the original smooth-sim path exactly.
@@ -254,19 +275,36 @@ class CBFHeadOn(Node):
         self.t_stream0 = None
         self.lock = threading.Lock()
 
-        self.create_subscription(Odometry, '/cf1/odom', lambda m: self._odom('cf1', m), 10)
-        self.create_subscription(Odometry, '/cf2/odom', lambda m: self._odom('cf2', m), 10)
+        self.create_subscription(Odometry, f'/{self.ego_id}/odom', lambda m: self._odom('cf1', m), 10)
+        self.create_subscription(Odometry, f'/{self.obs_id}/odom', lambda m: self._odom('cf2', m), 10)
         self.pub = {
-            'cf1': self.create_publisher(Position, '/cf1/cmd_position', 10),
-            'cf2': self.create_publisher(Position, '/cf2/cmd_position', 10),
+            'cf1': self.create_publisher(Position, f'/{self.ego_id}/cmd_position', 10),
+            'cf2': self.create_publisher(Position, f'/{self.obs_id}/cmd_position', 10),
         }
-        self.takeoff_cli = {n: self.create_client(Takeoff, f'/{n}/takeoff') for n in ('cf1', 'cf2')}
-        self.land_cli = {n: self.create_client(Land, f'/{n}/land') for n in ('cf1', 'cf2')}
+        _id = {'cf1': self.ego_id, 'cf2': self.obs_id}
+        self.takeoff_cli = {n: self.create_client(Takeoff, f'/{_id[n]}/takeoff') for n in ('cf1', 'cf2')}
+        self.land_cli = {n: self.create_client(Land, f'/{_id[n]}/land') for n in ('cf1', 'cf2')}
+        # low->high handoff: needed before the high-level Land after low-level cmd_position
+        # streaming (see land_both — missing this dropped both drones on HW 2026-06-30).
+        self.notify_cli = {n: self.create_client(NotifySetpointsStop, f'/{_id[n]}/notify_setpoints_stop')
+                           for n in ('cf1', 'cf2')}
+        # best-effort battery + tumble feed (present only if the server yaml enables the
+        # 'status' log topic; crazyflies_hw_2drone.yaml does). Absent feed -> '' in the CSV.
+        self.create_subscription(Status, f'/{self.ego_id}/status', lambda m: self._status('cf1', m), 10)
+        self.create_subscription(Status, f'/{self.obs_id}/status', lambda m: self._status('cf2', m), 10)
 
     def _odom(self, name, msg):
         p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        rpy = _quat_to_rpy(q.x, q.y, q.z, q.w)
         with self.lock:
             self.pos[name] = (p.x, p.y, p.z)
+            self.att[name] = rpy
+
+    def _status(self, name, msg):
+        tumbled = int(bool(msg.supervisor_info & Status.SUPERVISOR_INFO_IS_TUMBLED))
+        with self.lock:
+            self.status[name] = (float(msg.battery_voltage), tumbled)
 
     @staticmethod
     def _vdes(p_xy, goal_xy, kp, vmax):
@@ -282,6 +320,8 @@ class CBFHeadOn(Node):
     def _tick(self):
         with self.lock:
             p1, p2 = self.pos['cf1'], self.pos['cf2']
+            a1, a2 = self.att['cf1'], self.att['cf2']
+            s1, s2 = self.status['cf1'], self.status['cf2']
         if p1 is None or p2 is None or self.t_stream0 is None:
             return
         t = time.monotonic() - self.t_stream0
@@ -350,6 +390,11 @@ class CBFHeadOn(Node):
             'cbf_active': int(active),
             'bias_mag': round(float(bias_mag), 3), 'bias_active': int(bias_mag > 1e-3),
             'tgt1x': round(float(tgt1[0]),3), 'tgt1y': round(float(tgt1[1]),3),
+            # attitude (flip detection) + battery + supervisor tumble flag
+            'roll1': round(a1[0],3) if a1 else '', 'pitch1': round(a1[1],3) if a1 else '', 'yaw1': round(a1[2],3) if a1 else '',
+            'roll2': round(a2[0],3) if a2 else '', 'pitch2': round(a2[1],3) if a2 else '', 'yaw2': round(a2[2],3) if a2 else '',
+            'vbat1': round(s1[0],3) if s1 else '', 'tumb1': s1[1] if s1 else '',
+            'vbat2': round(s2[0],3) if s2 else '', 'tumb2': s2[1] if s2 else '',
         })
 
     # ---- service helpers (same pattern as bvc_headon_test.py) ----
@@ -370,6 +415,22 @@ class CBFHeadOn(Node):
         self._await(futs, 5.0)
 
     def land_both(self):
+        # ---- low-level -> high-level handoff BEFORE Land (crash fix, HW 2026-06-30) ----
+        # The run loop streams low-level /cfN/cmd_position, which latches low-level
+        # setpoint priority in firmware. Calling the high-level Land without first
+        # notifying setpoints-stop leaves Land IGNORED -> the last low-level setpoint
+        # expires with nothing replacing it -> the drone falls (both cf2+cf4 dropped,
+        # cf2 flipped). notify_setpoints_stop is crazyswarm2's standard handoff: it
+        # relinquishes low-level priority so the high-level Land actually engages.
+        nfuts = []
+        for n in ('cf1', 'cf2'):
+            if self.notify_cli[n].wait_for_service(timeout_sec=2.0):
+                req = NotifySetpointsStop.Request()
+                req.group_mask = 0
+                req.remain_valid_millisecs = 0      # last setpoint invalid now -> high-level takes over
+                nfuts.append(self.notify_cli[n].call_async(req))
+        self._await(nfuts, 2.0)
+        time.sleep(0.15)                            # let the handoff settle before Land
         futs = []
         for n in ('cf1', 'cf2'):
             if not self.land_cli[n].wait_for_service(timeout_sec=3.0):
@@ -470,6 +531,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--label', default='run')
     ap.add_argument('--out', default='/tmp/cbf/run.csv')
+    # Drone ID mapping (role -> physical drone). Defaults reproduce sim Tests 3-5
+    # exactly; HW (cf1/cf3 absent 2026-06-30) uses --ego-id cf2 --obs-id cf4.
+    ap.add_argument('--ego-id', dest='ego_id', default='cf1', help='ego/avoider drone id (HW: cf2)')
+    ap.add_argument('--obs-id', dest='obs_id', default='cf2', help='obstacle drone id (HW: cf4)')
     ap.add_argument('--z', type=float, default=1.0)
     ap.add_argument('--settle', type=float, default=3.0, help='hold-at-start seconds before run')
     ap.add_argument('--run', type=float, default=14.0, help='CBF streaming seconds')
@@ -482,6 +547,11 @@ def main():
     ap.add_argument('--kp', type=float, default=1.5, help='P-gain of v_des toward goal')
     ap.add_argument('--lookahead', type=float, default=0.6, help='setpoint lead time = v*lookahead (s)')
     ap.add_argument('--lat', type=float, default=0.2, help="cf2 goal y-offset; breaks head-on symmetry (0=exact head-on)")
+    ap.add_argument('--goal-beyond', dest='goal_beyond', type=float, default=0.0,
+                    help='extend the ego goal this many metres PAST the obstacle along the approach '
+                         'line. 0 = goal AT the obstacle (a STATIC obstacle then stalls the ego at the '
+                         'barrier tangent, ~90deg); >0 lets the ego complete a half-loop and continue '
+                         'straight out the far side. Default 0 reproduces sim Tests 3-5.')
     ap.add_argument('--no-vobs', dest='no_vobs', action='store_true', help='assume obstacle static (v_obs=0)')
     ap.add_argument('--bypass', action='store_true', help='disable CBF (ego flies straight -> collision-course control)')
     # right-hand bias (cures the exact-head-on deadlock; see right_bias())
@@ -539,8 +609,16 @@ def main():
     with node.lock:
         node.start['cf1'] = node.pos['cf1']
         node.start['cf2'] = node.pos['cf2']
-    # cf1 ego goal = cf2 start (swap); cf2 obstacle goal = cf1 start, offset in y by --lat
-    node.goal['cf1'] = np.array([node.start['cf2'][0], node.start['cf2'][1]])
+    # cf1 ego goal = cf2 start, extended --goal-beyond m PAST it along the approach line
+    # (ego_start -> obstacle). goal_beyond=0 => goal at obstacle (swap target, sim default);
+    # >0 => goal past the obstacle so a static obstacle no longer stalls the ego at the barrier.
+    ego_s = np.array([node.start['cf1'][0], node.start['cf1'][1]])
+    obs_s = np.array([node.start['cf2'][0], node.start['cf2'][1]])
+    approach = obs_s - ego_s
+    d = float(np.linalg.norm(approach))
+    u = approach / d if d > 1e-6 else np.array([1.0, 0.0])
+    node.goal['cf1'] = obs_s + u * args.goal_beyond
+    # cf2 obstacle goal = cf1 start, offset in y by --lat
     node.goal['cf2'] = np.array([node.start['cf1'][0], node.start['cf1'][1] + args.lat])
     log.info(f"initial: cf1={tuple(round(v,3) for v in node.start['cf1'])} "
              f"cf2={tuple(round(v,3) for v in node.start['cf2'])} | "

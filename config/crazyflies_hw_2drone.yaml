@@ -51,3 +51,8 @@ all:
     default_topics:
       odom:
         frequency: 20
+      # /cfN/status = battery_voltage + supervisor_info (IS_TUMBLED bit) + pm_state.
+      # Added 2026-06-30 so crash/flip is captured in data (the Stage A crash had no
+      # battery/tumble logging; cbf_headon_test.py subscribes /cfN/status best-effort).
+      status:
+        frequency: 10

@@ -146,9 +146,18 @@ source $CS2_WS/env.sh
 ros2 launch crazyflie launch.py \
     backend:=cflib \
     crazyflies_yaml_file:=$CS2_WS/config/crazyflies_hw.yaml \
+    motion_capture_yaml_file:=$CS2_WS/config/motion_capture.yaml \
     mocap:=True \
     gui:=false
 ```
+- **★ `motion_capture_yaml_file:=$CS2_WS/config/motion_capture.yaml` is MANDATORY.** Omit it and the
+  launch falls back to the **installed package default** (`install/crazyflie/share/crazyflie/config/motion_capture.yaml`),
+  whose `hostname` is the upstream placeholder **`141.23.110.143`** (a TU-Berlin address), **not** the lab
+  Vicon `192.168.0.62`. The `motion_capture_tracking` node then connects to the wrong host, gets **zero
+  frames** (`/poses` publisher count 0 — `nc :801` still "succeeds" because the socket is open), and with
+  no extpos the **EKFs diverge** (odom reads tens of metres). Verified live 2026-06-30 — this omission
+  cost a full debug cycle and was the upstream trigger of the Stage A crash sequence (§9). **Go-criterion:
+  after launch, `ros2 topic hz /poses` reads ~400 Hz; if it's silent, you dropped this arg.**
 - **`mocap:=True`** (opposite of sim's `mocap:=False`) — turns on the Vicon `motion_capture_tracking`
   node so `/poses`→extpos fusion runs ([hw_localization_path.md:45-52](hw_localization_path.md),
   [:73-75](hw_localization_path.md)). In sim it was False because there is no mocap
@@ -421,11 +430,78 @@ with both flying on the single dongle (odom age <50 ms throughout); smooth simul
 
 ---
 
+## 9. Stage A — static-obstacle CBF, first real avoidance flight (2026-06-30) ⚠️ PARTIAL — avoidance reproduced, crashed on landing
+
+First time the Python CBF ([scripts/cbf_headon_test.py](../scripts/cbf_headon_test.py)) ran on real
+drones. Setup: **ego=cf2** (SOUTH/−Y) approaches **static obstacle cf4** (NORTH/+Y); `--R 0.7
+--vmax 0.15 --obs-speed 0.0 --bias-gain 0.11 --z 0.5`, PeerFeed OFF, firmware colAv OFF (Python CBF
+sole avoider). Live auto-abort monitor (sep<0.55 → kill+`/all/land`). **Honest verdict: the
+avoidance worked, but the run is a FAIL on two counts — a stall and a crash.** Both below.
+
+### 9.1 What worked — avoidance reproduced on HW
+- **Sidestep signature matches sim Test 4.** cf2 drove +Y at static cf4, held separation at the
+  barrier, and veered to its **right (+X, east)** — the right-hand bias firing on real hardware
+  (bias active 86 % of ticks, `max|bias|=0.110`). Trajectory smooth, no oscillation/runaway.
+- **Barrier held during the active-CBF window**: script-reported MIN horiz sep **0.660 m** (≥ R−0.05).
+  ~4 cm inside nominal R=0.7 — consistent with sim (min-sep sits just at R) plus the measured HW
+  latency eating a few cm exactly as Test 5 predicted; R=0.7 absorbed it. No collision.
+
+### 9.2 Failure (a) — stalled at ~90°, half-loop never completed
+- The ego goal was set to the obstacle's position (`cf1 goal=(0.02,1.07)` = cf4's spot). With a
+  **static** obstacle sitting **on the goal**, once the ego reaches the barrier abeam (~90° around)
+  `v_des` points almost purely **radially** (at the goal=obstacle), leaving near-zero tangential drive;
+  the only thing pushing it further around is the bias, and **`--bias-gain 0.11` (vs sim 0.3) was too
+  weak** → it crept and stalled at 90°, never completing the half-loop / continuing straight.
+- **Fix:** `--goal-beyond` (extend the ego goal PAST the obstacle along the approach line so `v_des`
+  keeps a forward+tangential component all the way around) **+ `--bias-gain 0.3`**.
+
+### 9.3 Failure (b) — CRASH on landing (root cause + sim before/after)
+- **Symptom:** at the end of the run **both** drones dropped from 0.5 m and **cf2 flipped** — a hard
+  fall, not a controlled land. Live monitor: z 0.49→0.21→−0.09 in ~0.8 s (below-floor plunge).
+- **NOT** battery (no in-flight voltage was logged — see fix 4 — but both fell at the *exact* land
+  instant, ruling out brownout), **NOT** EKF divergence (CSV z stable ~0.50 until streaming stopped),
+  **NOT** the CBF (the avoidance window was clean).
+- **Root cause — missing low→high handoff.** The driver takes off via the **high-level** commander,
+  then streams **low-level** `/cfN/cmd_position` (50 Hz), which latches low-level setpoint priority in
+  firmware. `land_both()` then called the **high-level** `Land` **without** first calling
+  `/cfN/notify_setpoints_stop`. Result: `Land` is ignored, the last low-level setpoint expires with
+  nothing replacing it → commander watchdog timeout → **both drones fall simultaneously**; cf2, mid-
+  circle with horizontal motion, flips. `notify_setpoints_stop` is crazyswarm2's *standard* mechanism
+  for exactly this transition.
+- **Why sim hid it (Tests 3–5):** the same bug was always present in sim, but the sim validation only
+  ever measured *separation* — **nobody logged z through the land phase**, and a sim "crash" has no
+  physical consequence, so it printed a normal summary and went unnoticed.
+- **Causal proof — sim before/after, same stack/scenario (2026-06-30):**
+
+  | land path | run/hold z | land-phase z trajectory |
+  |---|---|---|
+  | **OLD** (no notify) | 1.00 m hover | 1.00 → 0.94 → 0.37 → **−0.249** in ~0.8 s (uncontrolled drop, below-floor) |
+  | **FIXED** (notify) | 1.00 m hover | 1.00 → 0.57 → 0.27 → 0.07 → 0, ~2.2 s **decelerating descent**, settles +0.015 |
+
+  The OLD sim plunge (−0.249, below floor) is the **same failure mode** as the HW crash → fix confirmed
+  causal, and the smooth FIXED descent is the controlled land.
+
+### 9.4 Fixes applied (verified in sim; not yet re-flown)
+1. **Crash fix** — `land_both()` calls `/cfN/notify_setpoints_stop` (`remain_valid_millisecs=0`) on each
+   drone *before* `Land`. ([cbf_headon_test.py](../scripts/cbf_headon_test.py) `land_both`.)
+2. **Pass fix** — `--goal-beyond <m>` extends the ego goal past the obstacle (default 0 = old/sim behaviour).
+3. **bias-gain** — use **0.3** (sim default) on HW, not 0.11; abeam, the bias is the sole tangential drive.
+4. **Logging** — CSV now logs ego/obstacle **attitude** (roll/pitch/yaw from odom, for flip detection) and
+   **battery + supervisor `IS_TUMBLED`** via a new `status` log topic in
+   [crazyflies_hw_2drone.yaml](../config/crazyflies_hw_2drone.yaml). (The crash had neither — flip was
+   inferred from physical observation only.)
+
+The CBF/bias/QP math is unchanged; sim defaults reproduce Tests 3–5. **Re-fly Stage A with**
+`--ego-id cf2 --obs-id cf4 --R 0.7 --vmax 0.15 --obs-speed 0.0 --goal-beyond 1.0 --bias-gain 0.3
+--peer-hz 20 --peer-delay 0 --peer-noise-std 0 --z 0.5`, and **do not omit `motion_capture_yaml_file`**
+at launch (§3 step 2). Then re-assess Stage B.
+
+---
+
 ## Open items (⚠️ NO REPO BASIS — resolve on HW)
-- **Drone-ID reconciliation for the avoidance stage:** the CBF head-on driver commands **cf1+cf2**
-  ([cbf_headon_test.py:257-258](../scripts/cbf_headon_test.py#L257)), but the live drones are
-  **cf2+cf4** (cf1/cf3 absent on 2026-06-30). Before the avoidance flight: either power on cf1, or
-  retarget the driver/yaml to cf2+cf4. Re-run the §2A gate after whichever choice.
+- ~~**Drone-ID reconciliation for the avoidance stage:** driver commands cf1+cf2 but live drones are
+  cf2+cf4.~~ **✅ DONE 2026-06-30** — driver parametrised with `--ego-id`/`--obs-id` (default cf1/cf2 =
+  sim-identical); HW uses `--ego-id cf2 --obs-id cf4`. §2A gate re-run and passed (no swap). See §9.
 - ~~Vicon real rate, position σ, end-to-end `/cf2/odom` delay — measure in §4 (Stage 0).~~
   **✅ MEASURED 2026-06-29 (cf2, real HW) — see §4.0.** Rate 20 Hz (odom) / 397 Hz (`/poses`);
   horizontal σ 0.8–0.9 cm; delay ≲ 67 ms (1-hop, resolution-limited). Not assumptions — actual
