@@ -1,0 +1,120 @@
+# 4-drone BVC (Buffered Voronoi Cell) hover config — Raman's collision-avoidance
+# validation. Sequence: takeoff -> simultaneous hover -> land, with the firmware
+# BVC filter ACTIVE the whole time (this is a BVC verification run, not CBF —
+# unrelated to scripts/cbf_headon_test.py / crazyflies_hw_2drone.yaml).
+#
+# Derived from config/crazyflies_hw.yaml (Raman's shared 4-drone fed_dcsa demo).
+# That shared yaml is LEFT UNTOUCHED; this is a separate copy. Only difference vs
+# the shared file: a broken drone is swapped out for the new cf5 (E5 radio), and
+# the roster is expressed as a POOL so the final 4 can be picked at run time.
+#
+# === BVC is INTENTIONALLY ON for this hover run ===
+# The shared yaml's note says "turn colAv off for hover-only" — that guidance is
+# for plain infra hover. Here the whole POINT is to exercise BVC while hovering,
+# so both halves stay ON (see the `all:` block):
+#   - peer_broadcast_hz: 10.0   -> server feeds each drone its neighbors' positions
+#   - colAv.enable: 1           -> onboard Buffered Voronoi Cell avoidance
+# Both are set globally in `all:` so EVERY enabled drone (incl. cf5) inherits them.
+#
+# === Roster / the cf5 swap ===
+# Radio scan history: cf2 (E2) + cf4 (E4) confirmed alive; cf1/cf3 did NOT respond
+# in the earlier scan. Raman confirmed cf3 physically BROKE; cf5 (E5) replaces it.
+# cf1 is the surviving original. So the flying set of 4 = {cf1, cf2, cf4, cf5}.
+#   -> cf1/cf2/cf4/cf5 are enabled below. cf3 is broken: enabled:false, do NOT fly.
+# (cf1 wasn't seen in the last radio scan — power/re-check it on HW connect, but it
+#  is the intended 4th drone per Raman.)
+#
+# === initial_position: PROBED 2026-07-01 from live /pointCloud (cardinal layout) ===
+# HW connected; mocap node run standalone (no radios) and raw markers read from
+# /pointCloud (seed-independent). Cardinal layout given by user: +X=cf1, +Y=cf2,
+# -X=cf4, -Y=cf5. All 4 showed ONE clean marker each (4 markers / 4 drones, 100%
+# presence) -> every seed below is real. (cf1 had a double marker on the first
+# probe; the extra marker was removed and cf1 re-probed clean 2026-07-01.)
+# Reminder: librigidbodytracker assigns IDs by position — a drone must sit within
+# ~50cm of its seed at startup or it gets mislabeled -> /cfN/odom maps to the wrong
+# physical drone -> crash. See crazyflies_hw_2drone.yaml header for the failure mode.
+fileversion: 3
+
+robots:
+  # --- surviving originals ---
+  cf1:
+    enabled: true       # surviving original — the 4th flying drone (Raman-confirmed)
+    uri: radio://0/100/2M/E7E7E7E7E1
+    # 2026-07-01: earlier probe caught a double marker here; extra marker removed,
+    # RE-PROBED clean (4 markers/4 drones, single point at 100% presence).
+    initial_position: [0.382, -0.097, 0.030]  # East/+X — PROBED from live /pointCloud 2026-07-01 (single clean marker)
+    type: cf21
+  cf2:
+    enabled: true       # confirmed alive (radio scan, E2)
+    uri: radio://0/100/2M/E7E7E7E7E2
+    initial_position: [0.024, 0.386, 0.034]  # North/+Y — PROBED from live /pointCloud 2026-07-01 (single clean marker)
+    type: cf21
+  cf4:
+    enabled: true       # confirmed alive (radio scan, E4)
+    uri: radio://0/100/2M/E7E7E7E7E4
+    initial_position: [-0.568, -0.101, 0.032]  # West/-X — PROBED from live /pointCloud 2026-07-01 (single clean marker)
+    type: cf21
+
+  # --- broken original (kept for the record; DO NOT enable) ---
+  cf3:
+    enabled: false      # BROKEN — physically broke (Raman-confirmed); replaced by cf5
+    uri: radio://0/100/2M/E7E7E7E7E3
+    initial_position: [-0.339, -0.007, 0.063]  # (2026-06-04 quadrant seed) — n/a, not flying
+    type: cf21
+
+  # --- new drone, replaces broken cf3 ---
+  cf5:
+    enabled: true       # NEW — swapped in for broken cf3
+    uri: radio://0/100/2M/E7E7E7E7E5
+    initial_position: [0.017, -0.569, 0.030]  # South/-Y — PROBED from live /pointCloud 2026-07-01 (single clean marker)
+    type: cf21
+
+robot_types:
+  # Same tracking format as the shared yaml: 1 retro ball per drone, disambiguated
+  # by initial_position + dynamics via librigidbodytracker. cf5 inherits this too.
+  cf21:
+    motion_capture:
+      tracking: "librigidbodytracker"
+      marker:   default_single_marker
+      dynamics: default
+    big_quad: false
+    battery: { voltage_warning: 3.8, voltage_critical: 3.7 }
+
+all:
+  # BVC peer-position broadcast: server tells each drone its neighbors' positions
+  # at this rate (Hz) via packed EXT_POSITION_PACKED CRTP, so onboard colAv has
+  # neighbors to avoid. Sourced from the firmware odom log (enabled below).
+  peer_broadcast_hz: 10.0   # BVC peer feed ON (10 Hz; 30 Hz was heavy).
+  firmware_params:
+    commander:  { enHighLevel: 1 }
+    stabilizer: { estimator: 2, controller: 1 }   # Kalman(2) + PID(1) — proven w/ single-marker mocap
+    locSrv:     { extPosStdDev: 0.01 }            # mocap trust — matches shared 4-drone baseline
+    # Buffered Voronoi Cell collision avoidance — ON: this run VALIDATES BVC.
+    colAv:      { enable: 1 }
+  firmware_logging:
+    # Required for /cfN/odom — peer_broadcast + any pose monitor subscribe to this.
+    enabled: true
+    default_topics:
+      odom:
+        frequency: 20
+      # /cfN/status = battery_voltage + supervisor_info (IS_TUMBLED bit) + pm_state.
+      # Cheap insurance so a hover crash/flip is captured in the log.
+      status:
+        frequency: 10
+
+# ===========================================================================
+# POST-HARDWARE-CONNECT CHECKLIST (do these next session, HW plugged in):
+#   1. Radio-scan / power-check the 4 flyers (cf1, cf2, cf4, cf5). cf1 wasn't in
+#      the last scan -> confirm it powers up and responds (cf3 is broken, skip it).
+#   2. All 4 seeds probed clean 2026-07-01 (one marker each). If drones are re-staged
+#      or bumped, RE-PROBE from live /pointCloud (seed-independent) and overwrite.
+#   3. Launch crazyswarm2 with the motion_capture_yaml_file arg — REQUIRED, or
+#      mocap won't feed and BVC has no peer positions (Vicon: 192.168.0.62:801,
+#      config/motion_capture.yaml).
+#   4. Radio<->Vicon mapping GATE (move-test): nudge one drone, confirm the
+#      matching /cfN/odom moves. librigidbodytracker labels by position, not by
+#      radio, so a bad seed silently maps a URI to the wrong body -> crash.
+#   5. Arm before takeoff (arm precedes the takeoff/hover/land sequence).
+#   6. Confirm colAv.enable=1 and peer_broadcast_hz>0 actually took on all 4
+#      (this is the BVC experiment — if either is off, BVC is blind).
+# ===========================================================================
