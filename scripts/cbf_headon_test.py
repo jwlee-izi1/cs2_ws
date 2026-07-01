@@ -292,6 +292,10 @@ class CBFHeadOn(Node):
         # 'status' log topic; crazyflies_hw_2drone.yaml does). Absent feed -> '' in the CSV.
         self.create_subscription(Status, f'/{self.ego_id}/status', lambda m: self._status('cf1', m), 10)
         self.create_subscription(Status, f'/{self.obs_id}/status', lambda m: self._status('cf2', m), 10)
+        # line-following (problem-1 fix): approach-axis frame (origin=ego_start, along=u,
+        # perp=u rotated +90deg) + goal's along-track coord. Set in main() if --line-follow.
+        self.axis_origin = None; self.axis_along = None; self.axis_perp = None; self.s_goal = 0.0
+        self.land_rows = []                            # z/attitude captured DURING the land descent
 
     def _odom(self, name, msg):
         p = msg.pose.pose.position
@@ -314,6 +318,35 @@ class CBFHeadOn(Node):
         n = np.linalg.norm(v)
         if n > vmax:
             v = v / n * vmax
+        return v
+
+    def _vdes_line(self, p_xy, peer_xy, a):
+        """Line-following v_des for the EGO (problem-1 fix). Instead of P-controlling
+        straight at the goal POINT (which, from an off-axis sidestep, cuts a diagonal to
+        the goal), track the original approach AXIS:
+
+            along-track: P-control toward the goal's axis-position (caps at vmax, decels at goal)
+            cross-track: -kct * e_ct  -> pulls the ego back ONTO the axis
+
+        The cross-track term is GATED off near the obstacle (dist < R+bias_margin) so the
+        right-hand bias / CBF can still sidestep freely during the encounter; once clear it
+        ramps back on, so the ego rejoins the axis and continues straight out (no diagonal).
+        Bias+QP downstream are unchanged — this only replaces the ego's base v_des."""
+        d = p_xy - self.axis_origin
+        s = float(d @ self.axis_along)                 # along-track distance from ego_start
+        e_ct = float(d @ self.axis_perp)               # signed cross-track offset from axis
+        v_along = float(np.clip(a.kp * (self.s_goal - s), -a.vmax, a.vmax))
+        # gate cross-track by ALONG-TRACK progress past the obstacle (not raw distance): the
+        # CBF keeps the ego ~R from the obstacle throughout the circumnav, so a distance gate
+        # would stay ~0 and never let it return. Turn on once the ego passes the obstacle's
+        # along-track position; the CBF still prevents any barrier penetration during the return.
+        s_obs = float((peer_xy - self.axis_origin) @ self.axis_along)
+        gate = min(1.0, max(0.0, (s - s_obs) / max(a.bias_margin, 1e-6)))
+        v_ct = -a.kct * e_ct * gate
+        v = v_along * self.axis_along + v_ct * self.axis_perp
+        n = np.linalg.norm(v)
+        if n > a.vmax:
+            v = v / n * a.vmax
         return v
 
     # ---- 50 Hz stream + log timer ----
@@ -348,8 +381,12 @@ class CBFHeadOn(Node):
             # cf2 obstacle: straight, constant-speed setpoint toward its (offset) goal
             vdes2 = self._vdes(p2xy, self.goal['cf2'], a.kp, a.obs_speed)
             tgt2 = p2xy + vdes2 * a.lookahead
-            # cf1 ego: CBF-filtered velocity toward its goal
-            vdes = self._vdes(p1xy, self.goal['cf1'], a.kp, a.vmax)
+            # cf1 ego: CBF-filtered velocity toward its goal. --line-follow tracks the
+            # approach axis (returns to it after the sidestep); else P-control at the point.
+            if a.line_follow and self.axis_along is not None:
+                vdes = self._vdes_line(p1xy, peer_p2, a)
+            else:
+                vdes = self._vdes(p1xy, self.goal['cf1'], a.kp, a.vmax)
             v_obs = np.zeros(2) if a.no_vobs else self.v_obs
             bias_mag = 0.0
             # p_obs the CBF/bias act on is the PERCEIVED (peer-feed) cf2 position, not true.
@@ -422,15 +459,19 @@ class CBFHeadOn(Node):
         # expires with nothing replacing it -> the drone falls (both cf2+cf4 dropped,
         # cf2 flipped). notify_setpoints_stop is crazyswarm2's standard handoff: it
         # relinquishes low-level priority so the high-level Land actually engages.
+        # remain_valid_millisecs > 0 (problem-2 fix): keep the LAST hover setpoint valid
+        # long enough to bridge the notify->Land gap. With 0 the setpoint was invalidated
+        # immediately, leaving a ~200 ms UNCOMMANDED window before Land engaged -> on HW the
+        # drone dipped, then Land re-descended = "double landing" (sim's idealised dynamics
+        # rode through the gap, so it only showed on HW). 400 ms covers the handoff.
         nfuts = []
         for n in ('cf1', 'cf2'):
             if self.notify_cli[n].wait_for_service(timeout_sec=2.0):
                 req = NotifySetpointsStop.Request()
                 req.group_mask = 0
-                req.remain_valid_millisecs = 0      # last setpoint invalid now -> high-level takes over
+                req.remain_valid_millisecs = 400
                 nfuts.append(self.notify_cli[n].call_async(req))
-        self._await(nfuts, 2.0)
-        time.sleep(0.15)                            # let the handoff settle before Land
+        self._await(nfuts, 2.0)                     # no sleep: Land immediately, within the 400 ms bridge
         futs = []
         for n in ('cf1', 'cf2'):
             if not self.land_cli[n].wait_for_service(timeout_sec=3.0):
@@ -441,6 +482,19 @@ class CBFHeadOn(Node):
             req.duration = Duration(sec=3, nanosec=0)
             futs.append(self.land_cli[n].call_async(req))
         self._await(futs, 4.0)
+        # log the land descent (the 50 Hz _tick timer is already stopped, so the main CSV
+        # ends at hold; this captures z/attitude THROUGH the land to verify a single smooth ramp).
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < self.args.land_log:
+            with self.lock:
+                p1, p2, a1 = self.pos['cf1'], self.pos['cf2'], self.att['cf1']
+            self.land_rows.append({
+                't': round(time.monotonic() - t0, 3),
+                'z1': round(p1[2], 4) if p1 else '', 'x1': round(p1[0], 4) if p1 else '', 'y1': round(p1[1], 4) if p1 else '',
+                'z2': round(p2[2], 4) if p2 else '',
+                'roll1': round(a1[0], 3) if a1 else '', 'pitch1': round(a1[1], 3) if a1 else '',
+            })
+            time.sleep(0.05)                        # ~20 Hz
 
     @staticmethod
     def _await(futs, timeout):
@@ -552,6 +606,17 @@ def main():
                          'line. 0 = goal AT the obstacle (a STATIC obstacle then stalls the ego at the '
                          'barrier tangent, ~90deg); >0 lets the ego complete a half-loop and continue '
                          'straight out the far side. Default 0 reproduces sim Tests 3-5.')
+    ap.add_argument('--line-follow', dest='line_follow', action='store_true',
+                    help='ego tracks the original approach AXIS (returns to it after the sidestep and '
+                         'continues straight) instead of P-controlling at the goal point (which cuts a '
+                         'diagonal from an off-axis sidestep). Default off = old point-seeking (sim Tests 3-5).')
+    ap.add_argument('--kct', type=float, default=2.0,
+                    help='cross-track return gain for --line-follow (higher = snappier axis return; too '
+                         'high may oscillate under HW lag). Gated on once the ego passes the obstacle '
+                         'along-track. 2.0 returned within ~9 cm with no oscillation offline.')
+    ap.add_argument('--land-log', dest='land_log', type=float, default=4.0,
+                    help='seconds to log ego/obstacle z + attitude THROUGH the land descent '
+                         '(-> <out>_land.csv; verifies a single smooth ramp vs a double landing)')
     ap.add_argument('--no-vobs', dest='no_vobs', action='store_true', help='assume obstacle static (v_obs=0)')
     ap.add_argument('--bypass', action='store_true', help='disable CBF (ego flies straight -> collision-course control)')
     # right-hand bias (cures the exact-head-on deadlock; see right_bias())
@@ -618,6 +683,11 @@ def main():
     d = float(np.linalg.norm(approach))
     u = approach / d if d > 1e-6 else np.array([1.0, 0.0])
     node.goal['cf1'] = obs_s + u * args.goal_beyond
+    if args.line_follow:                             # approach-axis frame for _vdes_line
+        node.axis_origin = ego_s
+        node.axis_along = u
+        node.axis_perp = np.array([-u[1], u[0]])     # u rotated +90deg
+        node.s_goal = float((node.goal['cf1'] - ego_s) @ u)
     # cf2 obstacle goal = cf1 start, offset in y by --lat
     node.goal['cf2'] = np.array([node.start['cf1'][0], node.start['cf1'][1] + args.lat])
     log.info(f"initial: cf1={tuple(round(v,3) for v in node.start['cf1'])} "
@@ -643,6 +713,20 @@ def main():
         with open(args.out, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=list(node.rows[0].keys()))
             w.writeheader(); w.writerows(node.rows)
+    # land-phase z trajectory (problem-2 verification) -> <out>_land.csv + inline summary
+    if node.land_rows:
+        land_out = args.out.replace('.csv', '_land.csv')
+        with open(land_out, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(node.land_rows[0].keys()))
+            w.writeheader(); w.writerows(node.land_rows)
+        zs = [r['z1'] for r in node.land_rows if r['z1'] != '']
+        if zs:
+            # count local minima that dip then rise >2 cm = a "double landing" bounce
+            bounces = sum(1 for i in range(1, len(zs) - 1) if zs[i] < zs[i-1] - 0.005 and zs[i] < zs[i+1] - 0.02)
+            print(f'LAND z trajectory     : start {zs[0]:.2f} -> min {min(zs):.2f} -> end {zs[-1]:.2f} m  '
+                  f'({len(zs)} samples, {land_out})')
+            print(f'  -> {"SINGLE smooth descent" if bounces == 0 else f"NON-MONOTONIC: {bounces} dip/re-descend (double-land?)"}'
+                  f'; min z {min(zs):.3f} ({"below floor!" if min(zs) < -0.1 else "ok"})')
     run_rows = [r for r in node.rows if r['phase'] in ('run', 'hold')]
     pool = run_rows or node.rows
     min_h = min(r['sep_h'] for r in pool)
