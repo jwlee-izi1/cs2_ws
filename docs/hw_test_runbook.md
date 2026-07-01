@@ -430,7 +430,7 @@ with both flying on the single dongle (odom age <50 ms throughout); smooth simul
 
 ---
 
-## 9. Stage A — static-obstacle CBF, first real avoidance flight (2026-06-30) ⚠️ PARTIAL — avoidance reproduced, crashed on landing
+## 9. Stage A — static-obstacle CBF avoidance ⚠️ first flight (2026-06-30) crashed → ✅ RESOLVED, full success on 2026-07-01 retry (§9.5)
 
 First time the Python CBF ([scripts/cbf_headon_test.py](../scripts/cbf_headon_test.py)) ran on real
 drones. Setup: **ego=cf2** (SOUTH/−Y) approaches **static obstacle cf4** (NORTH/+Y); `--R 0.7
@@ -495,6 +495,49 @@ The CBF/bias/QP math is unchanged; sim defaults reproduce Tests 3–5. **Re-fly 
 `--ego-id cf2 --obs-id cf4 --R 0.7 --vmax 0.15 --obs-speed 0.0 --goal-beyond 1.0 --bias-gain 0.3
 --peer-hz 20 --peer-delay 0 --peer-noise-std 0 --z 0.5`, and **do not omit `motion_capture_yaml_file`**
 at launch (§3 step 2). Then re-assess Stage B.
+
+### 9.5 Retry (2026-07-01) — ✅ FULL SUCCESS, both fixes HW-verified
+
+Re-flown 2026-07-01 in an **EAST-WEST** head-on (was N-S), **ego = cf5** (cf3 was damaged →
+replaced by cf5; radio scan confirmed E5 responds, E2 does not), **obstacle = cf4**. More aggressive
+than 06-30: **R 0.5 (was 0.7), vmax 0.25 (was 0.15)** — justified by the measured 1-hop delay (≲67 ms):
+`delay·v_rel = 0.25·0.067 ≈ 17 mm ≪ R=0.5` (§4.0), so R has margin; vmax was the speed limiter.
+
+**An intermediate 07-01 flight surfaced two residual issues in the §9.4 fixes, both then fixed:**
+- **(a) Diagonal return.** `--goal-beyond` put the goal on-axis, but P-controlling straight at that
+  *point* from the off-axis sidestep cut a diagonal — the ego never rejoined the approach axis.
+  **Fix: `--line-follow`** — the ego tracks the axis (along-track P-control + cross-track return,
+  gated on once it passes the obstacle along-track so the bias/CBF still sidestep during the
+  encounter). `--kct 2.0`. (`cbf_headon_test.py` `_vdes_line`; offline + SITL: returns to axis
+  within ~0.1 m, no oscillation.)
+- **(b) Double landing.** The §9.4 crash fix used `remain_valid_millisecs=0` (+ a 0.15 s sleep),
+  which invalidated the last low-level setpoint immediately → a **~200 ms uncommanded window** before
+  Land engaged → on HW the drone dipped then re-descended (sim rode through the gap, so it only
+  showed on HW). **Fix: `remain_valid_millisecs=400`, sleep removed** — the last hover setpoint
+  bridges the handoff. Also added **land-phase z logging** (`<out>_land.csv`) so the descent shape is
+  captured on HW.
+
+**Final flight (`--ego-id cf5 --obs-id cf4 --R 0.5 --vmax 0.25 --line-follow --goal-beyond 1.5
+--kct 2.0 --bias-gain 0.3 --obs-speed 0.0 --z 0.5`), real HW + video:**
+
+| Metric | Result | Verdict |
+|---|---|---|
+| MIN horiz separation | **0.507 m** (R=0.5) | **barrier HELD** ✅ (tight at the smaller R) |
+| Circumnavigation (line-follow) | ego reached the **on-axis** goal (final (−1.47,−0.06), dist-to-goal **0.01 m**) | ✅ returns to axis + reaches goal (vs 06-30's 90° stall / diagonal) |
+| **Landing (land-z log)** | **z 0.50 → 0.05 SINGLE smooth descent**, min 0.048 (no below-floor) | ✅ **double-landing fixed on HW** — `remain_valid=400` confirmed |
+| Sidestep | max\|y\| 0.40 m (north) | smooth, no flip |
+| Obstacle drift (static cf4) | 0.24 m (downwash; less than 06-30) | tolerable |
+
+**Both fixes (`--line-follow`, `remain_valid_millisecs=400`) are now HW-verified, not just sim.**
+Stage A is complete. **Stage B (both drones moving) is unblocked** — line-follow especially suits it
+(the swap goal is naturally across the volume, giving room to return to axis and continue straight).
+
+**Session gotchas (2026-07-01):** ego ID was cf5 not cf2 (a radio *scan* — `scan_interfaces` per
+address — diagnoses this fast: cf2/E2 silent, cf5/E5 + cf4/E4 respond); seeds re-probed to the
+E-W layout from raw `/pointCloud` (marker positions, seed-independent, work with drones **off**);
+cf4's radio link was intermittently lossy (`Too many packets lost`, 15 Hz / 358 ms gaps) until
+**power-cycling cf4 + re-seating the dongle + moving the drone closer to the dongle** restored a clean
+20 Hz — check odom rate steadiness before flying, not just "fully connected".
 
 ---
 

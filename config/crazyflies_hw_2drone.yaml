@@ -13,20 +13,20 @@ fileversion: 3
 
 robots:
   # RE-PROBED 2026-07-01: drones relocated to an EAST-WEST head-on (was N-S on 06-30).
-  # Positions from raw /pointCloud (seed-independent): E2=EAST(+X), E4=WEST(-X), both y~-0.09.
-  # NOTE: with the old N-S seeds both drones fell nearest cf2's seed and the min-cost
-  # assignment SWAPPED (east->cf4) -> re-probe was mandatory. Seeds MUST match each radio
-  # drone's real position or librigidbodytracker mislabels (label is position-derived, not
-  # radio-derived) -> /cfN/odom maps to the wrong physical drone -> crash. Verify via §2A move-test.
-  cf2:
+  # EGO IS cf5(radio E5), not cf2 — a radio scan showed E2 does NOT respond, E5/E4 do
+  # (2026-07-01). Positions from raw /pointCloud (seed-independent): E5=EAST(+X ego),
+  # E4=WEST-of-ego(obstacle), both y~-0.09. Seeds MUST match each radio drone's real
+  # position or librigidbodytracker mislabels (label is position-derived, not radio-derived)
+  # -> /cfN/odom maps to the wrong physical drone -> crash.
+  cf5:
     enabled: true
-    uri: radio://0/100/2M/E7E7E7E7E2
-    initial_position: [1.219, -0.086, 0.023]  # E2 = EAST(ego), probed from /pointCloud 2026-07-01
+    uri: radio://0/100/2M/E7E7E7E7E5
+    initial_position: [1.219, -0.086, 0.023]  # E5 = EAST(ego), probed from /pointCloud 2026-07-01
     type: cf21
   cf4:
     enabled: true
     uri: radio://0/100/2M/E7E7E7E7E4
-    initial_position: [-0.573, -0.098, 0.033]  # E4 = WEST(obstacle), probed from /pointCloud 2026-07-01
+    initial_position: [0.023, -0.081, 0.033]  # E4 = WEST-of-ego(obstacle), re-probed /pointCloud 2026-07-01 (drones-off markers)
     type: cf21
 
 robot_types:
