@@ -308,3 +308,89 @@ mocap:=False`), driver `scripts/cbf_headon_test.py`. Cases: A `--lat 0.0 --ideal
 B `--lat 0.0`, C `--lat 0.0 --vobs-ema 0.15`, ablation `--peer-delay 0.0` / `--peer-noise-std 0.0`,
 fix `--lat 0.0 --R 0.55`. CSVs + `test5_peer_robustness.png` in `/tmp/cbf/`. Offline checks:
 `--selftest-peer` (v_obs roughness), `--selftest` (bias activation, unchanged).
+
+---
+
+## Test 6 — CBF circle-orbiting obstacle, ego crosses a diameter → two active avoidances — 2026-07-02 ✅
+
+**Scenario.** A new sim-designed scenario, still the asymmetric CBF (cf2 = pure obstacle, only
+cf1 = ego avoids). Instead of a straight-line obstacle, **cf2 orbits a circle** (centre (0,0),
+radius **1.0 m**, angular speed **ω=0.26 rad/s CCW**); cf1 flies the **vertical diameter x=0**
+from (0,−1.7) **through the centre** to (0,+1.7). The ego path therefore crosses the orbit at
+two points — bottom (0,−1) and top (0,+1) — and the timing is tuned so the obstacle is near
+each crossing as the ego arrives, giving **two separate crossing encounters**. The ego CBF /
+line-follow is unchanged in spirit; two new *scenario* mechanisms (below) make the two dodges
+clean. Headless verdict quantitative; GUI (`--gui`, `gz-gpu` RTX) used for visual confirmation.
+
+    obstacle: p_obs(t) = C + r·(cos(φ0+ωt), sin(φ0+ωt)),  C=(0,0) r=1.0 ω=0.26 φ0=−150°
+    ego     : single-integrator CBF, line-follow along the x=0 diameter, goal (0,+1.7)
+    Params  : R_design=0.6, α=3.0, vmax=0.25, --ideal-peer (pure sim; HW peer degrade = Test 5)
+
+**Why the head-on tools fail on a crossing (and what replaces them).** Two problems appeared
+that Tests 3–5 (straight-line head-on) never hit:
+
+1. **Braking vs circumnavigation.** With the right-hand bias OFF, the single-integrator CBF on a
+   perpendicular crossing just **brakes and waits** for the obstacle to pass (sidestep ≈0.07 m —
+   barely visible). With the *head-on* `right_bias` ON, it veers to a **fixed right** that here
+   coincides with the obstacle's travel direction → it chases the obstacle, runs **1.5 m off
+   axis** and **misses the 2nd encounter**. Fix: a new **`steer_behind` bias** (`--pass-behind`)
+   that reads the obstacle velocity and dodges toward the side the obstacle is **leaving** (its
+   tail) → the ego passes *behind* it, an **active circumnavigation** with the correct side for a
+   crossing. Sidestep grows 0.07 → **0.46 m** at both encounters. Falls back to right-hand when
+   the closing is truly head-on (v_lat→0), so it doesn't regress Tests 3–5.
+2. **Return-to-axis between the two passes.** The line-follow cross-track return is gated on
+   *along-track progress past the obstacle* — fine for a straight obstacle passed once, but an
+   **orbiting** obstacle's along-track coord is non-monotonic, so the gate never re-arms and the
+   ego stays **pushed to one side** the whole run. Fix: **`--ct-dist-gate`** (distance-based):
+   rejoin the axis whenever *clear* of the obstacle, release near it → the ego returns to centre
+   in the gap and dodges again (verified ego-x → 0.00 mid-run).
+
+**Timing — the core tuning knob is ω** (the point of the whole exercise):
+- ω too high (0.314, the naïve "half-turn while the ego crosses the diameter"): the ego, **slowed
+  by the 1st avoidance**, reaches the top crossing *after* the obstacle has left it → **2nd
+  encounter vanishes** (they pass at 0.98 m, CBF idle).
+- ω too low (0.224): the 2nd becomes **near head-on** → a violent 0.9 m detour, asymmetric.
+- **ω=0.26 balances** both: two symmetric encounters, each a moderate 0.46 m dodge.
+- The **1st encounter also fights a cold `v_obs`** (EMA warm-up from 0 at run start) → extra
+  penetration if it happens too early. Delaying it via **φ0=−150°** (1st encounter at t≈5.5 s,
+  not t≈1.5 s) lets `v_obs` warm before the close approach.
+
+**Result — headless sim, `--ideal-peer`, R_design=0.6** (true horizontal separation):
+
+| Encounter | time | min-sep | vs R_safety 0.5 | sidestep | mode |
+|---|---|---|---|---|---|
+| **ENC1** (bottom) | t≈5.5 s | **0.581 m** | ✅ +0.08 | 0.46 m | CBF + pass-behind bias active |
+| _mid gap_ | t≈13 s | 1.10 m | — | ego-x → **0.00** (back on axis) | cross-track return (dist-gate) |
+| **ENC2** (top) | t≈17.3 s | **0.581 m** | ✅ +0.08 | 0.46 m | CBF + pass-behind bias active |
+
+Ego: **two active dodges, each followed by a clean return to the x=0 diameter**, then reaches
+goal (0.00, 1.70); land = single smooth descent. Both true min-seps 0.581 ≥ 0.5. Plot:
+`/tmp/cbf/circle_active_dodge.png` (orbit + ego diameter + two encounter chords; separation
+trace = two dips both ≥0.5 with a clean ~1.1 m hump between).
+
+**Design-R margin (same lever as Test 5).** The offline kinematic barrier floor sits at ≈R
+(discrete-time convergence); the sim adds ~0.05–0.08 m of firmware setpoint-tracking lag
+penetration. `R_design=0.6` (safety 0.5 + margin) recovers true min-sep ≥ 0.5 at **both**
+encounters. Raising R too far (0.8) backfires here: the spawn separation (~0.55 m) then starts
+*inside* the barrier, and the larger avoidance delays the ego enough to drift the 2nd encounter.
+
+**Verdict.** Circle-orbit two-encounter scenario **OK in sim**. The straight-line head-on tools
+don't transfer to a crossing — the fixed right-hand bias is wrong-signed (chase/runaway) and the
+along-track cross-track gate can't re-arm against an orbiting obstacle — so two scenario
+mechanisms were added: **`steer_behind` / `--pass-behind`** (dodge behind the moving obstacle →
+active circumnavigation, not brake-and-wait) and **`--ct-dist-gate`** (distance-gated axis
+return between the two passes). Timing is set almost entirely by **ω** (0.26 = two balanced
+encounters); φ0 delays the 1st past the `v_obs` warm-up. Both barriers held at 0.581 ≥ 0.5.
+**Next → hardware:** replicate with ego@(0,−1.7), obstacle@(−0.87,−0.5) (both z=1.0), obstacle
+orbiting (0,0) r=1.0 ω=0.26 CCW. On HW use a **larger R_design** — Test 5's relay-delay margin
+stacks on top of this scenario's tracking-lag margin (budget `R = 0.5 + tracking_lag·v_rel +
+relay_delay·v_rel`); re-confirm once the real peer delay is measured.
+
+**Reproduce** (headless, fresh stack per run): launcher `scripts/sitl_2drone_headon.sh` with
+spawn override `CF1_X=0 CF1_Y=-1.7 CF2_X=-0.866 CF2_Y=-0.5` + crazyswarm2 on
+`config/crazyflies_sitl_2drone_nobvc.yaml` (`backend:=cflib gui:=False mocap:=False`), driver:
+`scripts/cbf_headon_test.py --obs-circle --obs-center 0 0 --obs-radius 1.0 --obs-omega 0.26
+--obs-phase0-deg -150 --ego-goal 0 1.7 --line-follow --pass-behind --bias-gain 0.45
+--bias-margin 0.4 --ct-dist-gate --ideal-peer --vmax 0.25 --R 0.6 --alpha 3.0 --run 24`. Offline
+timing tuner (no sim): `--selftest-circle` (reports the two encounter min-seps + axis return).
+CSVs + `circle_active_dodge.png` in `/tmp/cbf/`.

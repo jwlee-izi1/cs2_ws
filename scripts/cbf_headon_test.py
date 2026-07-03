@@ -150,6 +150,43 @@ def right_bias(p_ego, p_obs, v_des, R, bias_gain, bias_margin):
     return mag * right_hat, {'align': align, 'prox': prox, 'mag': mag}
 
 
+def steer_behind(p_ego, p_obs, v_des, v_obs, R, gain, margin):
+    """Crossing-avoidance lateral bias: steer the ego to pass BEHIND a moving obstacle.
+
+    The right_bias() above fixes the HEAD-ON degeneracy by always veering to the ego's
+    right — correct when the obstacle closes head-on, but WRONG for a crossing obstacle
+    (it can veer the ego INTO the obstacle's travel direction and chase it). This variant
+    instead reads the obstacle's motion and biases v_des toward the side the obstacle is
+    LEAVING (its tail), so the ego slips behind it and continues — an active circumnavigation
+    rather than a brake-and-wait. Used for the circle scenario (--pass-behind).
+
+        d        = p_obs - p_ego,  u = d/|d|      line of sight toward the obstacle
+        perp     = (-u_y, u_x)                    +90deg of the LOS
+        v_lat    = v_obs . perp                   obstacle's crossing (lateral) speed, signed
+        side     = -sign(v_lat)                   dodge OPPOSITE the obstacle's lateral motion
+                                                  = toward where it came from = pass behind
+        bias     = gain * align * prox * side * perp
+
+      align/prox gate exactly like right_bias (near + frontal only), so tracking is untouched
+      when the obstacle is far or off to the side. If the obstacle has ~no lateral motion
+      (closing straight along the LOS = true head-on) v_lat->0 and we fall back to the ego's
+      right (side=+1), recovering right_bias's head-on behaviour."""
+    d = p_obs - p_ego
+    dist = float(np.linalg.norm(d))
+    nv = float(np.linalg.norm(v_des))
+    if dist < 1e-6 or nv < 1e-6 or gain <= 0.0:
+        return np.zeros(2), {'align': 0.0, 'prox': 0.0, 'mag': 0.0}
+    u = d / dist
+    u_des = v_des / nv
+    align = max(0.0, float(u_des @ u))
+    prox = min(1.0, max(0.0, (R + margin - dist) / max(margin, 1e-6)))
+    perp = np.array([-u[1], u[0]])
+    v_lat = float(np.asarray(v_obs) @ perp)
+    side = -1.0 if v_lat > 1e-3 else (1.0 if v_lat < -1e-3 else 1.0)   # pass behind; head-on -> right
+    mag = gain * align * prox
+    return mag * side * perp, {'align': align, 'prox': prox, 'mag': mag}
+
+
 class PeerFeed:
     """Models the HARDWARE peer-position feed degradation on top of sim's perfect cf2 state.
 
@@ -295,6 +332,10 @@ class CBFHeadOn(Node):
         # line-following (problem-1 fix): approach-axis frame (origin=ego_start, along=u,
         # perp=u rotated +90deg) + goal's along-track coord. Set in main() if --line-follow.
         self.axis_origin = None; self.axis_along = None; self.axis_perp = None; self.s_goal = 0.0
+        # circle-obstacle scenario (--obs-circle): obstacle drives a circle instead of a
+        # straight line. phi0 = its start phase on that circle (derived from spawn in main()
+        # so there's no jump at run start); radius/center/omega come from args.
+        self.obs_phi0 = 0.0
         self.land_rows = []                            # z/attitude captured DURING the land descent
 
     def _odom(self, name, msg):
@@ -340,8 +381,21 @@ class CBFHeadOn(Node):
         # CBF keeps the ego ~R from the obstacle throughout the circumnav, so a distance gate
         # would stay ~0 and never let it return. Turn on once the ego passes the obstacle's
         # along-track position; the CBF still prevents any barrier penetration during the return.
-        s_obs = float((peer_xy - self.axis_origin) @ self.axis_along)
-        gate = min(1.0, max(0.0, (s - s_obs) / max(a.bias_margin, 1e-6)))
+        if a.ct_dist_gate:
+            # DISTANCE-gated cross-track return (circle scenario): pull back onto the axis
+            # whenever CLEAR of the obstacle, release near it. gate=0 at the barrier (dist=R),
+            # ramps to 1 by dist=R+bias_margin. With an ORBITING obstacle the ego meets it
+            # twice and must rejoin the axis BETWEEN the two passes — the along-track gate
+            # below can't do that (obstacle's along-track coord isn't monotonic), a distance
+            # gate does: far from the obstacle -> return; close -> dodge freely.
+            dist = float(np.linalg.norm(p_xy - peer_xy))
+            gate = min(1.0, max(0.0, (dist - a.R) / max(a.bias_margin, 1e-6)))
+        else:
+            # ALONG-TRACK gate (head-on default): the CBF keeps the ego ~R from a straight-line
+            # obstacle throughout the circumnav, so a distance gate would stay ~0 and never let
+            # it return; turn on once the ego passes the obstacle's along-track position instead.
+            s_obs = float((peer_xy - self.axis_origin) @ self.axis_along)
+            gate = min(1.0, max(0.0, (s - s_obs) / max(a.bias_margin, 1e-6)))
         v_ct = -a.kct * e_ct * gate
         v = v_along * self.axis_along + v_ct * self.axis_perp
         n = np.linalg.norm(v)
@@ -378,9 +432,21 @@ class CBFHeadOn(Node):
             bias_mag = 0.0
         else:
             phase = 'run' if t < settle + a.run else 'hold'
-            # cf2 obstacle: straight, constant-speed setpoint toward its (offset) goal
-            vdes2 = self._vdes(p2xy, self.goal['cf2'], a.kp, a.obs_speed)
-            tgt2 = p2xy + vdes2 * a.lookahead
+            if a.obs_circle:
+                # cf2 obstacle: drive a circle of radius --obs-radius about --obs-center at
+                # angular speed --obs-omega (rad/s, sign = CCW/CW). Command the circle POINT
+                # (a lookahead ahead in phase = a tangential lead) rather than a velocity, so
+                # firmware tracks the geometric path directly. tc measured from run start
+                # (obstacle held at spawn through settle); phi0 set from spawn => no jump.
+                tc = t - settle
+                cx, cy = a.obs_center
+                ang = self.obs_phi0 + a.obs_omega * (tc + a.lookahead)
+                tgt2 = np.array([cx + a.obs_radius * math.cos(ang),
+                                 cy + a.obs_radius * math.sin(ang)])
+            else:
+                # cf2 obstacle: straight, constant-speed setpoint toward its (offset) goal
+                vdes2 = self._vdes(p2xy, self.goal['cf2'], a.kp, a.obs_speed)
+                tgt2 = p2xy + vdes2 * a.lookahead
             # cf1 ego: CBF-filtered velocity toward its goal. --line-follow tracks the
             # approach axis (returns to it after the sidestep); else P-control at the point.
             if a.line_follow and self.axis_along is not None:
@@ -397,7 +463,10 @@ class CBFHeadOn(Node):
                 # deadlock); QP constraint unchanged. --no_bias reproduces the old behaviour.
                 vdes_q = vdes
                 if not a.no_bias:
-                    bias, _binfo = right_bias(p1xy, peer_p2, vdes, a.R, a.bias_gain, a.bias_margin)
+                    if a.pass_behind:                  # crossing bias: steer behind the moving obstacle
+                        bias, _binfo = steer_behind(p1xy, peer_p2, vdes, v_obs, a.R, a.bias_gain, a.bias_margin)
+                    else:                              # head-on bias: fixed right-hand
+                        bias, _binfo = right_bias(p1xy, peer_p2, vdes, a.R, a.bias_gain, a.bias_margin)
                     bias_mag = _binfo['mag']
                     vdes_q = vdes + bias
                     nb = float(np.linalg.norm(vdes_q))
@@ -581,6 +650,115 @@ def _selftest_peer(args):
           '(at the cost of a bit more bias/lag).\n')
 
 
+def _find_encounters(ts, seps, thresh):
+    """Return one (t, sep) per distinct ENCOUNTER: a contiguous excursion where the
+    separation dips below `thresh`, reduced to that excursion's minimum. Hysteresis
+    (separation must climb back above `thresh` before a new encounter is counted)
+    collapses the wiggly real-sim sep trace into the true number of passes — so a clean
+    two-encounter run reports exactly two, not one-per-local-wiggle."""
+    enc = []
+    in_dip = False
+    best_t = None; best_s = None
+    for t, s in zip(ts, seps):
+        if s < thresh:
+            if not in_dip or s < best_s:
+                best_t, best_s = t, s
+            in_dip = True
+        else:
+            if in_dip:
+                enc.append((best_t, best_s))
+            in_dip = False
+    if in_dip:
+        enc.append((best_t, best_s))
+    return enc
+
+
+def _selftest_circle(args):
+    """Offline (no ROS/sim) closed-loop kinematic run of the circle-obstacle scenario.
+
+    Ego = 2D single integrator with the SAME line-follow v_des + right-hand bias + CBF-QP
+    used live (scripts _vdes_line / right_bias / cbf_filter); obstacle = exact circle point,
+    v_obs = analytic circle velocity (the 'v_obs ON, ideal peer' case). Geometry: the ego
+    goal is --ego-goal and the ego start is placed diametrically opposite across --obs-center,
+    so the ego path is a DIAMETER through the centre and crosses the orbit at two points.
+
+    Prints the two encounter min-seps + whether the ego returns to the axis — the fast loop
+    for tuning omega / phase0 so BOTH crossings produce an encounter before a real sim run.
+    """
+    C = np.array(args.obs_center, dtype=float)
+    r = args.obs_radius if args.obs_radius > 0 else 1.0
+    omega = args.obs_omega
+    phi0 = math.radians(args.obs_phase0_deg) if args.obs_phase0_deg is not None else math.radians(-135.0)
+    goal = np.array(args.ego_goal, dtype=float) if args.ego_goal is not None else (C + np.array([0.0, 1.5]))
+    ego0 = 2.0 * C - goal                              # diametrically opposite the goal
+    step = goal - ego0
+    d = float(np.linalg.norm(step))
+    u = step / d if d > 1e-6 else np.array([0.0, 1.0])
+    perp = np.array([-u[1], u[0]])
+    s_goal = d
+    dt = 0.02
+    T = args.run
+    n = int(T / dt)
+    p1 = ego0.copy()
+    ts, seps, cts, actives = [], [], [], []
+    for k in range(n):
+        t = k * dt
+        ang = phi0 + omega * t
+        p2 = C + r * np.array([math.cos(ang), math.sin(ang)])
+        v_obs = np.zeros(2) if args.no_vobs else omega * r * np.array([-math.sin(ang), math.cos(ang)])
+        # ego line-follow v_des (mirror of _vdes_line)
+        dd = p1 - ego0
+        s = float(dd @ u); e_ct = float(dd @ perp)
+        v_along = float(np.clip(args.kp * (s_goal - s), -args.vmax, args.vmax))
+        if args.ct_dist_gate:
+            dist = float(np.linalg.norm(p1 - p2))
+            gate = min(1.0, max(0.0, (dist - args.R) / max(args.bias_margin, 1e-6)))
+        else:
+            s_obs = float((p2 - ego0) @ u)
+            gate = min(1.0, max(0.0, (s - s_obs) / max(args.bias_margin, 1e-6)))
+        v_ct = -args.kct * e_ct * gate
+        vdes = v_along * u + v_ct * perp
+        nv = float(np.linalg.norm(vdes))
+        if nv > args.vmax:
+            vdes = vdes / nv * args.vmax
+        vdes_q = vdes
+        if not args.no_bias:
+            if args.pass_behind:
+                bias, _ = steer_behind(p1, p2, vdes, v_obs, args.R, args.bias_gain, args.bias_margin)
+            else:
+                bias, _ = right_bias(p1, p2, vdes, args.R, args.bias_gain, args.bias_margin)
+            vdes_q = vdes + bias
+            nb = float(np.linalg.norm(vdes_q))
+            if nb > args.vmax:
+                vdes_q = vdes_q / nb * args.vmax
+        vsafe, h, active = cbf_filter(p1, p2, vdes_q, v_obs, args.R, args.alpha)
+        p1 = p1 + vsafe * dt
+        ts.append(t); seps.append(float(np.linalg.norm(p1 - p2)))
+        cts.append(e_ct); actives.append(active)
+    enc = _find_encounters(ts, seps, thresh=args.R + 0.4)
+    reached = float(np.linalg.norm(p1 - goal))
+    final_ct = float((p1 - ego0) @ perp)
+    max_ct = max(abs(c) for c in cts)
+    print('\n=== circle-scenario offline kinematic self-test ===')
+    print(f'center={tuple(C)} radius={r:.2f} omega={omega:.4f} rad/s (period {2*math.pi/max(abs(omega),1e-9):.1f}s) '
+          f'phi0={math.degrees(phi0):.1f}deg')
+    print(f'ego start={tuple(ego0.round(2))} -> goal={tuple(goal.round(2))}  (diameter len {d:.2f} m)  '
+          f'vmax={args.vmax} R={args.R} alpha={args.alpha} bias={"OFF" if args.no_bias else "ON"}')
+    print(f'ego expected diameter-transit time (no avoidance) = {d/args.vmax:.1f}s; '
+          f'obstacle half-turn = {math.pi/max(abs(omega),1e-9):.1f}s\n')
+    print(f'ENCOUNTERS (sep local minima < R+0.4={args.R+0.4:.2f}): {len(enc)} found')
+    for i, (te, se) in enumerate(enc, 1):
+        print(f'  #{i}  t={te:5.2f}s   min-sep={se:.3f} m   barrier {"HELD" if se >= args.R-0.03 else "VIOLATED"} (R={args.R})')
+    if len(enc) < 2:
+        print('  -> FEWER than 2 encounters. Timing knobs: if the 2nd is missed, the ego (slowed by')
+        print('     the 1st sidestep) reaches the far crossing AFTER the obstacle left it -> LOWER --obs-omega')
+        print('     (obstacle lingers) or nudge --obs-phase0-deg. If encounters merge into 1, RAISE omega.')
+    print(f'\noverall min-sep = {min(seps):.3f} m (R={args.R})   max |cross-track| = {max_ct:.3f} m (sidestep)')
+    print(f'ego final = {tuple(p1.round(2))}  dist-to-goal {reached:.2f} m -> {"REACHED" if reached < 0.25 else "SHORT"}; '
+          f'final cross-track {final_ct:+.3f} m -> {"back on axis" if abs(final_ct) < 0.1 else "OFF axis"}\n')
+    return enc
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--label', default='run')
@@ -601,6 +779,27 @@ def main():
     ap.add_argument('--kp', type=float, default=1.5, help='P-gain of v_des toward goal')
     ap.add_argument('--lookahead', type=float, default=0.6, help='setpoint lead time = v*lookahead (s)')
     ap.add_argument('--lat', type=float, default=0.2, help="cf2 goal y-offset; breaks head-on symmetry (0=exact head-on)")
+    # ---- circle-obstacle scenario (obstacle orbits; ego crosses a diameter -> two encounters) ----
+    ap.add_argument('--obs-circle', dest='obs_circle', action='store_true',
+                    help='obstacle drives a CIRCLE (radius/center/omega below) instead of a straight line. '
+                         'Pair with --ego-goal on the opposite side so the ego line is a diameter through '
+                         'the centre and crosses the orbit at two points (two avoidance encounters).')
+    ap.add_argument('--obs-center', dest='obs_center', type=float, nargs=2, default=[0.0, 0.0],
+                    metavar=('CX', 'CY'), help='circle centre (m); ego diameter line should pass through it')
+    ap.add_argument('--obs-radius', dest='obs_radius', type=float, default=-1.0,
+                    help='circle radius (m); <=0 => derive from the obstacle spawn (spawn lies on the circle)')
+    ap.add_argument('--obs-omega', dest='obs_omega', type=float, default=0.3927,
+                    help='obstacle angular speed (rad/s; + = CCW). Default pi*0.25/2 = half-turn while an '
+                         'ego at vmax=0.25 crosses a r=1 diameter (default two-encounter timing knob).')
+    ap.add_argument('--obs-phase0-deg', dest='obs_phase0_deg', type=float, default=None,
+                    help='override the obstacle start phase on the circle (deg). Default None => derive '
+                         'from spawn (no jump). Set it (and match the spawn) to tune two-encounter timing.')
+    ap.add_argument('--ego-goal', dest='ego_goal', type=float, nargs=2, default=None,
+                    metavar=('GX', 'GY'), help='set the ego goal EXPLICITLY (overrides the head-on '
+                         'obstacle-derived goal). Use for the circle scenario: the far side of the diameter.')
+    ap.add_argument('--selftest-circle', dest='selftest_circle', action='store_true',
+                    help='offline (no ROS/sim) closed-loop kinematic run of the circle scenario; reports '
+                         'the two encounter min-seps + ego axis return, for timing tuning. Exit.')
     ap.add_argument('--goal-beyond', dest='goal_beyond', type=float, default=0.0,
                     help='extend the ego goal this many metres PAST the obstacle along the approach '
                          'line. 0 = goal AT the obstacle (a STATIC obstacle then stalls the ego at the '
@@ -626,6 +825,15 @@ def main():
                     help='proximity ramp width (m): bias starts at dist=R+margin, full at dist<=R')
     ap.add_argument('--no-bias', dest='no_bias', action='store_true',
                     help='disable the right-hand bias -> reproduces the head-on deadlock (control)')
+    ap.add_argument('--ct-dist-gate', dest='ct_dist_gate', action='store_true',
+                    help='distance-gate the line-follow cross-track return (circle scenario): rejoin the '
+                         'axis whenever CLEAR of the obstacle, so the ego returns to centre BETWEEN the two '
+                         'passes instead of staying pushed to one side. Default = along-track gate (head-on).')
+    ap.add_argument('--pass-behind', dest='pass_behind', action='store_true',
+                    help='use the crossing-avoidance bias (steer_behind): dodge to the side the moving '
+                         'obstacle is LEAVING so the ego actively circumnavigates behind it, instead of '
+                         'the fixed right-hand head-on bias. For the circle scenario (obstacle crosses '
+                         'the ego path). Falls back to right-hand when the obstacle closes head-on.')
     ap.add_argument('--selftest', action='store_true',
                     help='run the offline bias unit-check (no ROS/sim) and exit')
     # ---- hardware peer-feed degradation layer (see PeerFeed; docs/hw_localization_path.md §3) ----
@@ -652,6 +860,8 @@ def main():
         _selftest(args); return
     if args.selftest_peer:
         _selftest_peer(args); return
+    if args.selftest_circle:
+        _selftest_circle(args); return
 
     rclpy.init()
     node = CBFHeadOn(args)
@@ -674,22 +884,50 @@ def main():
     with node.lock:
         node.start['cf1'] = node.pos['cf1']
         node.start['cf2'] = node.pos['cf2']
-    # cf1 ego goal = cf2 start, extended --goal-beyond m PAST it along the approach line
-    # (ego_start -> obstacle). goal_beyond=0 => goal at obstacle (swap target, sim default);
-    # >0 => goal past the obstacle so a static obstacle no longer stalls the ego at the barrier.
     ego_s = np.array([node.start['cf1'][0], node.start['cf1'][1]])
     obs_s = np.array([node.start['cf2'][0], node.start['cf2'][1]])
-    approach = obs_s - ego_s
-    d = float(np.linalg.norm(approach))
-    u = approach / d if d > 1e-6 else np.array([1.0, 0.0])
-    node.goal['cf1'] = obs_s + u * args.goal_beyond
+    # cf1 ego goal. --ego-goal sets it EXPLICITLY (circle scenario: a diameter line through
+    # the circle centre, independent of where the obstacle spawns). Otherwise the head-on
+    # default: cf2 start extended --goal-beyond m PAST it along the approach line
+    # (ego_start -> obstacle). goal_beyond=0 => goal at obstacle (swap target, sim default);
+    # >0 => goal past the obstacle so a static obstacle no longer stalls the ego at the barrier.
+    if args.ego_goal is not None:
+        node.goal['cf1'] = np.array(args.ego_goal, dtype=float)
+        step = node.goal['cf1'] - ego_s
+        d = float(np.linalg.norm(step))
+        u = step / d if d > 1e-6 else np.array([1.0, 0.0])   # ego heading = start -> goal
+    else:
+        approach = obs_s - ego_s
+        d = float(np.linalg.norm(approach))
+        u = approach / d if d > 1e-6 else np.array([1.0, 0.0])
+        node.goal['cf1'] = obs_s + u * args.goal_beyond
     if args.line_follow:                             # approach-axis frame for _vdes_line
         node.axis_origin = ego_s
         node.axis_along = u
         node.axis_perp = np.array([-u[1], u[0]])     # u rotated +90deg
         node.s_goal = float((node.goal['cf1'] - ego_s) @ u)
-    # cf2 obstacle goal = cf1 start, offset in y by --lat
-    node.goal['cf2'] = np.array([node.start['cf1'][0], node.start['cf1'][1] + args.lat])
+    if args.obs_circle:
+        # obstacle circles --obs-center; phase0 from its SPAWN so there's no jump at run start.
+        # --obs-radius <=0 => derive from spawn (guarantees the spawn is exactly on the circle).
+        C = np.array(args.obs_center, dtype=float)
+        rel = obs_s - C
+        if args.obs_phase0_deg is not None:
+            node.obs_phi0 = math.radians(args.obs_phase0_deg)
+            spawn_phi = math.degrees(math.atan2(rel[1], rel[0]))
+            if abs((spawn_phi - args.obs_phase0_deg + 180) % 360 - 180) > 5.0:
+                log.warn(f"--obs-phase0-deg {args.obs_phase0_deg:.1f} != spawn phase {spawn_phi:.1f}deg "
+                         f"-> obstacle will JUMP to the circle at run start. Match the spawn to avoid it.")
+        else:
+            node.obs_phi0 = math.atan2(rel[1], rel[0])
+        if args.obs_radius <= 0.0:
+            args.obs_radius = float(np.linalg.norm(rel))
+        node.goal['cf2'] = obs_s                      # unused in circle mode; keep non-None
+        log.info(f"obstacle CIRCLE: center={tuple(C)} radius={args.obs_radius:.3f} "
+                 f"omega={args.obs_omega:.4f} rad/s  phi0={math.degrees(node.obs_phi0):.1f}deg "
+                 f"(period {2*math.pi/max(abs(args.obs_omega),1e-9):.1f}s)")
+    else:
+        # cf2 obstacle goal = cf1 start, offset in y by --lat
+        node.goal['cf2'] = np.array([node.start['cf1'][0], node.start['cf1'][1] + args.lat])
     log.info(f"initial: cf1={tuple(round(v,3) for v in node.start['cf1'])} "
              f"cf2={tuple(round(v,3) for v in node.start['cf2'])} | "
              f"cf1 goal={tuple(node.goal['cf1'].round(2))} cf2 goal={tuple(node.goal['cf2'].round(2))}")
@@ -744,6 +982,18 @@ def main():
           f'active {n_bias}/{len(pool)} ticks ({100*n_bias/max(1,len(pool)):.0f}%)  max|bias|={max_bias:.3f} m/s')
     print(f'MIN horiz separation : {min_h:.3f} m   (safety radius R={args.R}; BVC baseline 0.61 m)')
     print(f'  -> barrier {"HELD" if min_h >= args.R - 0.05 else "VIOLATED"} (R-0.05 tol)')
+    if args.obs_circle:                                # two-encounter breakdown (circle scenario)
+        enc = _find_encounters([r['t'] for r in pool], [r['sep_h'] for r in pool], thresh=args.R + 0.4)
+        print(f'ENCOUNTERS (sep dips < R+0.4={args.R+0.4:.2f}): {len(enc)} '
+              f'{"(want 2: lower + upper crossing)" if len(enc) != 2 else "-> two encounters as designed"}')
+        for i, (te, se) in enumerate(enc, 1):
+            print(f'  #{i}  t={te:6.2f}s   min-sep={se:.3f} m   barrier {"HELD" if se >= args.R-0.05 else "VIOLATED"}')
+        # true sidestep = max perpendicular offset from the ego diameter axis (max|y| above is
+        # meaningless for a vertical path — it just tracks goal progress along the axis).
+        if node.axis_origin is not None:
+            max_ct = max(abs(float((np.array([r['x1'], r['y1']]) - node.axis_origin) @ node.axis_perp))
+                         for r in pool)
+            print(f'max cross-track (sidestep off diameter axis): {max_ct:.3f} m')
     print(f'MIN 3D separation    : {min_3d:.3f} m')
     print(f'max |y| cf1          : {max_y1:.3f} m   (circumnavigation; ~0 => braked, no sidestep)')
     print(f'CBF active ticks     : {n_active}/{len(pool)}  ({100*n_active/max(1,len(pool)):.0f}% of run)')

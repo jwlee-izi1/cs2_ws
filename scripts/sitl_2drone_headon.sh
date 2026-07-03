@@ -25,8 +25,11 @@ vehicle_model="${VEHICLE_MODEL:-crazyflie}"
 export CF2_SIM_MODEL=gz_${vehicle_model}
 
 # cf_id -> spawn (x, y).  index 0 = cf1, index 1 = cf2.
-SPAWN_X=(-1.0  1.0)
-SPAWN_Y=( 0.0  0.0)
+# Overridable via env (defaults reproduce the head-on Tests 2-5 layout unchanged). For the
+# circle-obstacle scenario the ego (cf1) sits below the circle and the obstacle (cf2) starts
+# on the orbit, e.g.:  CF1_X=0 CF1_Y=-1.5 CF2_X=-0.707 CF2_Y=-0.707 scripts/sitl_2drone_headon.sh --gui
+SPAWN_X=(${CF1_X:--1.0}  ${CF2_X:-1.0})
+SPAWN_Y=(${CF1_Y:-0.0}   ${CF2_Y:-0.0})
 NUM=2
 
 function cleanup() {
